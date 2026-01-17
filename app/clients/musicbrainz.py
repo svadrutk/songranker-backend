@@ -63,6 +63,13 @@ class MusicBrainzClient:
         deduplicated = {}
         for rg in release_groups:
             title = rg.get("title", "")
+            title_lower = title.lower()
+            
+            # Explicitly skip junk album types from search results
+            skip_album_keywords = ["karaoke", "instrumental", "tour", "live", "sessions"]
+            if any(kw in title_lower for kw in skip_album_keywords):
+                continue
+                
             norm_title = normalize(title)
             
             if not norm_title:
@@ -209,18 +216,24 @@ class MusicBrainzClient:
             
             # Simple skip check
             should_skip = False
-            for kw in skip_keywords:
-                # Check for word boundaries. We use a simpler check for common patterns.
-                if re.search(rf"\b{re.escape(kw)}\b", track_lower):
-                    # Special Case: "Mix" can be part of a real title (e.g., "The Mix")
-                    # but if it's in parentheses or after a hyphen, it's almost certainly a remix tag.
-                    if kw == "mix":
-                        if any(p in track_lower for p in ["(mix", "[mix", " - mix", " remix"]):
+            
+            # Explicit check for "karaoke" anywhere in the name as requested
+            if "karaoke" in track_lower:
+                should_skip = True
+            
+            if not should_skip:
+                for kw in skip_keywords:
+                    # Check for word boundaries. We use a simpler check for common patterns.
+                    if re.search(rf"\b{re.escape(kw)}\b", track_lower):
+                        # Special Case: "Mix" can be part of a real title (e.g., "The Mix")
+                        # but if it's in parentheses or after a hyphen, it's almost certainly a remix tag.
+                        if kw == "mix":
+                            if any(p in track_lower for p in ["(mix", "[mix", " - mix", " remix"]):
+                                should_skip = True
+                                break
+                        else:
                             should_skip = True
                             break
-                    else:
-                        should_skip = True
-                        break
             
             if should_skip:
                 continue
