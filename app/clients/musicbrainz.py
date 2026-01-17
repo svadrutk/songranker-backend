@@ -10,19 +10,29 @@ class MusicBrainzClient:
             "User-Agent": settings.MUSICBRAINZ_USER_AGENT,
             "Accept": "application/json",
         }
+        self._client = None
+
+    async def get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                headers=self.headers,
+                timeout=httpx.Timeout(30.0),
+                follow_redirects=True
+            )
+        return self._client
 
     async def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        async with httpx.AsyncClient() as client:
-            # MusicBrainz prefers fmt=json in params
-            params = params or {}
-            params["fmt"] = "json"
-            response = await client.get(
-                f"{self.base_url}{endpoint}", 
-                headers=self.headers, 
-                params=params
-            )
-            response.raise_for_status()
-            return response.json()
+        client = await self.get_client()
+        # MusicBrainz prefers fmt=json in params
+        params = params or {}
+        params["fmt"] = "json"
+        
+        response = await client.get(
+            f"{self.base_url}{endpoint}", 
+            params=params
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def search_artist(self, query: str) -> List[Dict[str, Any]]:
         data = await self._get("/artist", params={"query": query})
@@ -36,7 +46,7 @@ class MusicBrainzClient:
             "limit": 100
         }
         data = await self._get("/release-group", params=params)
-        release_groups = data.get("release-groups", [])
+        release_groups = data.get("release-groups") or []
         
         # Expanded list of deluxe-indicating keywords
         deluxe_keywords = [
@@ -53,6 +63,7 @@ class MusicBrainzClient:
             return 3
 
         def normalize(title):
+            if not title: return ""
             # Remove parenthetical info which often contains "Deluxe Edition"
             base = title.lower()
             base = re.sub(r'[\(\[\{].*?[\)\]\}]', '', base)
@@ -62,12 +73,17 @@ class MusicBrainzClient:
         # Deduplication and Deluxe Prioritization
         deduplicated = {}
         for rg in release_groups:
-            title = rg.get("title", "")
+            title = rg.get("title") or ""
             title_lower = title.lower()
             
             # Explicitly skip junk album types from search results
-            skip_album_keywords = ["karaoke", "instrumental", "tour", "live", "sessions"]
+            skip_album_keywords = ["karaoke", "instrumental", "tour", "live", "sessions", "demos", "remixes", "remix"]
             if any(kw in title_lower for kw in skip_album_keywords):
+                continue
+                
+            # Also check secondary types for explicit remix/live/demo tags
+            secondary_types = [t.lower() for t in (rg.get("secondary-types") or [])]
+            if any(kw in secondary_types for kw in ["remix", "live", "demo"]):
                 continue
                 
             norm_title = normalize(title)
@@ -75,15 +91,15 @@ class MusicBrainzClient:
             if not norm_title:
                 norm_title = re.sub(r'[^a-z0-9]', '', title.lower()).strip()
             
-            rg_type = rg.get("primary-type", "Other")
+            rg_type = rg.get("primary-type") or "Other"
             is_deluxe = any(kw in title.lower() for kw in deluxe_keywords)
             
             if norm_title not in deduplicated:
                 deduplicated[norm_title] = rg
             else:
                 existing = deduplicated[norm_title]
-                existing_title = existing.get("title", "")
-                existing_type = existing.get("primary-type", "Other")
+                existing_title = existing.get("title") or ""
+                existing_type = existing.get("primary-type") or "Other"
                 existing_is_deluxe = any(kw in existing_title.lower() for kw in deluxe_keywords)
                 
                 # Selection Logic:
@@ -112,11 +128,11 @@ class MusicBrainzClient:
             results.append({
                 "id": rg.get("id"),
                 "title": rg.get("title"),
-                "type": rg.get("primary-type", "Other"),
-                "cover_art": rg.get("cover-art-archive", {})
+                "type": rg.get("primary-type") or "Other",
+                "cover_art": rg.get("cover-art-archive") or {}
             })
             
-        return sorted(results, key=lambda x: (get_type_priority(x["type"]), x["title"]))
+        return sorted(results, key=lambda x: (get_type_priority(x["type"]), x["title"] or ""))
 
     async def get_release_group_tracks(self, rg_id: str) -> List[str]:
         # To get tracks for a release group, we first fetch all official releases in that group
@@ -127,7 +143,7 @@ class MusicBrainzClient:
             "limit": 100
         }
         data = await self._get("/release", params=params)
-        releases = data.get("releases", [])
+        releases = data.get("releases") or []
         
         if not releases:
             return []
@@ -145,13 +161,13 @@ class MusicBrainzClient:
         best_release_id = releases[0].get("id")
         best_score = -1000
         best_track_count = 0
-        best_release_title = releases[0].get("title", "")
+        best_release_title = releases[0].get("title") or ""
         
         for release in releases:
-            total_tracks = sum(medium.get("track-count", 0) for medium in release.get("media", []))
-            title = release.get("title", "")
+            total_tracks = sum((medium.get("track-count") or 0) for medium in (release.get("media") or []))
+            title = release.get("title") or ""
             title_lower = title.lower()
-            country = release.get("country", "")
+            country = release.get("country") or ""
             
             # Start with a base score
             score = 0
@@ -189,9 +205,9 @@ class MusicBrainzClient:
         release_data = await self._get(f"/release/{best_release_id}", params={"inc": "recordings"})
         
         raw_tracks = []
-        for medium in release_data.get("media", []):
-            for track in medium.get("tracks", []):
-                raw_tracks.append(track.get("title"))
+        for medium in (release_data.get("media") or []):
+            for track in (medium.get("tracks") or []):
+                raw_tracks.append(track.get("title") or "")
 
         # 2. Cleanup and Deduplicate logic
         # Keywords that indicate we should probably skip the track for a standard ranking
@@ -212,6 +228,7 @@ class MusicBrainzClient:
         seen_base_titles = {} # Use dict to store (base_title: original_title)
         
         for track in raw_tracks:
+            if not track: continue
             track_lower = track.lower()
             
             # Simple skip check
@@ -256,12 +273,14 @@ class MusicBrainzClient:
                 # Keep the shortest title version (usually the cleanest base name)
                 existing_track = seen_base_titles[base_title]
                 if len(track) < len(existing_track):
-                    idx = cleaned_tracks.index(existing_track)
-                    cleaned_tracks[idx] = track
-                    seen_base_titles[base_title] = track
+                    try:
+                        idx = cleaned_tracks.index(existing_track)
+                        cleaned_tracks[idx] = track
+                        seen_base_titles[base_title] = track
+                    except ValueError:
+                        pass
         
         return cleaned_tracks
-
 
 musicbrainz_client = MusicBrainzClient()
 

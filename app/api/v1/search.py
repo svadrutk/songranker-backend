@@ -33,7 +33,7 @@ async def search(query: str = Query(..., min_length=1)):
         release_groups = await musicbrainz_client.get_artist_release_groups(artist_id)
         return release_groups
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e) or "Internal Server Error during search")
 
 @router.get("/tracks/{release_group_id}", response_model=TrackResponse)
 async def get_tracks(release_group_id: str):
@@ -45,4 +45,4 @@ async def get_tracks(release_group_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e) or "Internal Server Error during track fetch")
