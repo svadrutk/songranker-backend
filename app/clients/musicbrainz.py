@@ -251,6 +251,7 @@ class MusicBrainzClient:
         title = release.get("title") or ""
         title_lower = title.lower()
         country = release.get("country") or ""
+        disambiguation = (release.get("disambiguation") or "").lower()
         
         score = 0
         
@@ -266,19 +267,24 @@ class MusicBrainzClient:
             score += 200
         
         # 3. Completeness (Medium)
-        if any(kw in title_lower for kw in completeness_keywords):
-            score += 50
-            
+        # Check both title and disambiguation for keywords
+        for kw in completeness_keywords:
+            if kw in title_lower or kw in disambiguation:
+                score += 50
+                # Give an extra boost for "deluxe" specifically
+                if kw == "deluxe":
+                    score += 50
+        
         # 4. Tie-breaker: Track count (Small)
-        score += (total_tracks * 2)
+        if total_tracks == 0:
+            score -= 1000 # Heavily penalize releases with no tracks
+        else:
+            score += (total_tracks * 2)
         
         return score
 
     async def get_release_group_tracks(self, rg_id: str, client: Optional[httpx.AsyncClient] = None) -> List[str]:
-        # To get tracks, we first try to treat rg_id as a Release Group ID
-        statuses = ["official", None]
-        releases = []
-        
+        # To get tracks, we first try to treat rg_id as a Release ID
         try:
             release_data = await self._get(f"/release/{rg_id}", params={"inc": "recordings"}, client=client)
             if "media" in release_data:
@@ -286,46 +292,38 @@ class MusicBrainzClient:
         except Exception:
             pass
 
-        for status in statuses:
-            params = {"release-group": rg_id, "inc": "media", "limit": 100}
-            if status:
-                params["status"] = status
-            try:
-                data = await self._get("/release", params=params, client=client)
-                releases = data.get("releases") or []
-                if releases:
-                    break
-            except Exception:
-                continue
+        # If it's a Release Group ID, we browse releases
+        # Optimization: include recordings in the browse call to avoid a second network request
+        params = {"release-group": rg_id, "inc": "media+recordings", "limit": 50, "status": "official"}
+        try:
+            data = await self._get("/release", params=params, client=client)
+            releases = data.get("releases") or []
+        except Exception:
+            return []
         
         if not releases:
             return []
             
-        completeness_keywords = [
-            "deluxe", "expanded", "paradise", "edition", "complete", 
-            "remastered", "3am", "til dawn", "platinum", "gold", "diamond",
-            "special", "collector", "limited", "super", "ultra", "ultimate"
-        ]
         english_countries = ["US", "GB", "UK", "CA", "AU", "NZ", "XE", "XW"]
 
-        # Scoring system to pick the best release
+        # Scoring system to pick the best release from the ones we fetched
         best_release = releases[0]
         best_score = -1000
         
         for release in releases:
-            score = self._score_release(release, english_countries, completeness_keywords)
-            total_tracks = sum((medium.get("track-count") or 0) for medium in (release.get("media") or []))
+            # Add track_count to release object if not present for scoring logic
+            if "track_count" not in release:
+                release["track_count"] = sum((medium.get("track-count") or 0) for medium in (release.get("media") or []))
+            
+            score = self._score_release(release, english_countries, DELUXE_KEYWORDS)
             
             if score > best_score:
                 best_score = score
                 best_release = release
             elif score == best_score:
-                # Tie-breaker on track count if scores are identical
-                best_total = sum((medium.get("track-count") or 0) for medium in (best_release.get("media") or []))
-                if total_tracks > best_total:
+                if release["track_count"] > best_release.get("track_count", 0):
                     best_release = release
 
-        release_data = await self._get(f"/release/{best_release['id']}", params={"inc": "recordings"}, client=client)
-        return self._parse_tracks(release_data, best_release.get("title", ""))
+        return self._parse_tracks(best_release, best_release.get("title", ""))
 
 musicbrainz_client = MusicBrainzClient()

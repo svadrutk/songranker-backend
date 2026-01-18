@@ -17,7 +17,7 @@ DELUXE_KEYWORDS = [
     "deluxe", "expanded", "platinum", "special", "edition", 
     "complete", "remastered", "3am", "til dawn", "paradise",
     "gold", "diamond", "anniversary", "collector", "limited",
-    "super", "ultra", "mega", "ultimate"
+    "super", "ultra", "mega", "ultimate", "bonus", "extra", "track", "plus"
 ]
 
 SKIP_KEYWORDS = ["karaoke", "instrumental", "tour", "live", "sessions", "demos", "remixes", "remix"]

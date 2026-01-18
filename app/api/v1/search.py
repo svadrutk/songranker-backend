@@ -75,6 +75,7 @@ def _merge_results(lastfm_albums: List[Dict], mb_release_groups: List[Dict], def
 
         norm_title = normalize_title(title)
         mb_entry = mb_lookup.get(norm_title)
+        # Favor Last.fm MBID for speed (usually points to most popular release)
         mbid = album["mbid"] or (mb_entry["id"] if mb_entry else None)
         
         if not mbid or mbid in seen_mbids:
