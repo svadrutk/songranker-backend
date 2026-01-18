@@ -50,4 +50,15 @@ class SupabaseDB:
         except Exception:
             pass
 
+    async def delete_expired_cache(self):
+        """Delete cache entries that have been expired for more than 24 hours."""
+        client = await self.get_client()
+        try:
+            # SWR window is usually 24h, so we delete anything expired > 24h ago
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+            await client.table("api_cache").delete().lt("expires_at", cutoff).execute()
+        except Exception as e:
+            from app.core.cache import logger
+            logger.error(f"Failed to delete expired cache: {e}")
+
 supabase_client = SupabaseDB()
