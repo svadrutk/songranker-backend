@@ -22,6 +22,10 @@ DELUXE_KEYWORDS = [
 
 SKIP_KEYWORDS = ["karaoke", "instrumental", "tour", "live", "sessions", "demos", "remixes", "remix"]
 
+def is_spotify_id(resource_id: str) -> bool:
+    """Check if the ID looks like a Spotify ID (22 chars, alphanumeric)."""
+    return len(resource_id) == 22 and "-" not in resource_id and ":" not in resource_id
+
 def normalize_title(title: str) -> str:
     if not title:
         return ""

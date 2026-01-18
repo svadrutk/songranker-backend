@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional, Dict, Any, cast
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, BackgroundTasks
@@ -7,8 +8,12 @@ import re
 
 from app.clients.musicbrainz import musicbrainz_client
 from app.clients.lastfm import lastfm_client
-from app.core.utils import normalize_title, DELUXE_KEYWORDS, SKIP_KEYWORDS
+from app.clients.spotify import spotify_client
+from app.core.utils import normalize_title, is_spotify_id, DELUXE_KEYWORDS, SKIP_KEYWORDS
 from app.core.cache import cache
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -32,6 +37,25 @@ class ReleaseGroupResponse(BaseModel):
 
 class TrackResponse(BaseModel):
     tracks: List[str]
+
+async def _resolve_mbid_background(artist: str, title: str, spotify_id: str, client: httpx.AsyncClient):
+    """
+    Background task to find the MusicBrainz ID for a Spotify album.
+    Stores the link in the cache for future consistency.
+    """
+    try:
+        # Search for the specific release group
+        mbid = await musicbrainz_client.search_release_group(artist, title, client=client)
+        if mbid:
+            # Store the mapping so we know this Spotify ID maps to this MBID
+            # TODO: Add reader for this cache to bridge Spotify IDs to MBIDs in other endpoints
+            await cache.get_or_fetch(
+                f"spotify_map:{spotify_id}",
+                lambda: mbid,
+                ttl_seconds=86400 * 30 # 30 days
+            )
+    except Exception as e:
+        logger.error(f"Error resolving MBID for Spotify ID {spotify_id}: {e}")
 
 async def _get_artist_context(query: str, client: httpx.AsyncClient):
     """Retrieve artist name and MBID from Last.fm."""
@@ -116,7 +140,21 @@ async def search(request: Request, background_tasks: BackgroundTasks, query: str
     if not norm_query:
         return []
 
-    # 2. Get Artist Context (Alias Cache)
+    # 2. FAST PATH: Spotify
+    # If credentials are present, use Spotify as the primary search engine.
+    # It is faster (200ms vs 1s+) and handles typos natively.
+    if settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET:
+        cache_key = f"spotify_search:{norm_query}"
+        results = await cache.get_or_fetch(
+            cache_key,
+            lambda: spotify_client.search_artist_albums(query, client),
+            ttl_seconds=3600,
+            background_tasks=background_tasks
+        )
+        if results:
+            return results
+
+    # 3. Get Artist Context (Alias Cache)
     # This handles "Taylow Swift" -> {"name": "Taylor Swift", "mbid": "..."}
     artist_context = await cache.get_or_fetch(
         f"alias:{norm_query}",
@@ -132,7 +170,7 @@ async def search(request: Request, background_tasks: BackgroundTasks, query: str
     artist_name = artist_context["name"]
     artist_mbid = artist_context.get("mbid")
 
-    # 3. Get Artist Albums (Canonical Cache)
+    # 4. Get Artist Albums (Canonical Cache)
     # Use MBID if available, else name
     cache_key = f"artist_albums:{artist_mbid or artist_name}"
     results = await cache.get_or_fetch(
@@ -166,6 +204,13 @@ async def get_tracks(
     client = request.app.state.http_client
     
     async def fetch_tracks():
+        # FAST PATH: Spotify ID Detection
+        # Spotify IDs are typically 22 alphanumeric chars. MBIDs are UUIDs (36 chars).
+        if is_spotify_id(release_group_id):
+             if artist and title:
+                 background_tasks.add_task(_resolve_mbid_background, artist, title, release_group_id, client)
+             return await spotify_client.get_album_tracks(release_group_id, client=client)
+
         # Prepare parallel tasks
         tasks = []
         

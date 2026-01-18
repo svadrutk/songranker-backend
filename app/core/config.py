@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     NEXT_PUBLIC_SUPABASE_URL: str = ""
     SUPABASE_PUBLIC_ANON_KEY: str = ""
     
+    # Spotify
+    SPOTIFY_CLIENT_ID: str = ""
+    SPOTIFY_CLIENT_SECRET: str = ""
+    
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
     
     @property
