@@ -3,7 +3,7 @@ import base64
 import time
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
-from app.core.utils import normalize_title, DELUXE_KEYWORDS, SKIP_KEYWORDS
+from app.core.utils import normalize_title, DELUXE_KEYWORDS, SKIP_KEYWORDS, get_type_priority
 
 class SpotifyClient:
     def __init__(self):
@@ -37,10 +37,15 @@ class SpotifyClient:
         response.raise_for_status()
         data = response.json()
         
-        self._access_token = data["access_token"]
+        access_token = data.get("access_token")
+        if not access_token:
+             raise ValueError("Failed to retrieve Spotify access token")
+             
+        self._access_token = access_token
         # Set expiration (subtract 60s for safety)
         self._token_expires_at = time.time() + data["expires_in"] - 60
-        return self._access_token
+        
+        return access_token
 
     async def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None, client: Optional[httpx.AsyncClient] = None) -> Dict[str, Any]:
         """Authenticated GET request."""
@@ -70,18 +75,29 @@ class SpotifyClient:
         
         # 2. Get Artist's Albums
         # include_groups: album,single,compilation,appears_on
-        # We focus on 'album' and 'single' (which covers EPs sometimes)
+        # We fetch more than 50 to ensure we don't miss EPs for prolific artists
         params = {
-            "include_groups": "album,single", 
+            "include_groups": "album,single,compilation", 
             "limit": 50,
-            "market": "US" # Enforce a market to avoid duplicates/unplayable versions
+            "market": "US"
         }
         
-        albums_res = await self._get(f"/artists/{artist_id}/albums", params=params, client=client)
-        raw_albums = albums_res.get("items", [])
+        all_items = []
+        url = f"/artists/{artist_id}/albums"
+        
+        # Fetch up to 2 pages (100 items) to balance speed and completeness
+        for _ in range(2):
+            res = await self._get(url, params=params if not all_items else None, client=client)
+            items = res.get("items", [])
+            all_items.extend(items)
+            
+            next_url = res.get("next")
+            if not next_url:
+                break
+            url = next_url.replace(self.base_url, "")
         
         # Deduplicate and Clean
-        return self._process_albums(raw_albums, artist_name)
+        return self._process_albums(all_items, artist_name)
 
     def _process_albums(self, albums: List[Dict[str, Any]], artist_name: str) -> List[Dict[str, Any]]:
         """Deduplicate albums (Spotify returns many versions) and format."""
@@ -95,33 +111,54 @@ class SpotifyClient:
             if any(kw in title.lower() for kw in SKIP_KEYWORDS):
                 continue
             
-            # Simple normalization
+            # Normalize title
             norm_title = normalize_title(title)
             is_deluxe = any(kw in title.lower() for kw in DELUXE_KEYWORDS)
             
+            # Determine type label and priority
+            raw_type = album.get("album_type", "").lower()
+            total_tracks = album.get("total_tracks", 0)
+            
+            # Label as EP if:
+            # 1. Spotify explicitly says "ep" (rare but possible)
+            # 2. It's a "single" but has 4-7 tracks (Spotify's "single" limit is often fuzzy)
+            # 3. It's an "album" but has 4-7 tracks (Many EPs are uploaded as albums)
+            # 4. The title contains "EP"
+            is_ep_in_title = any(pattern in title.lower() for pattern in [" - ep", " ep", "(ep)"])
+            
+            if raw_type == "ep" or (4 <= total_tracks <= 7) or is_ep_in_title:
+                display_type = "EP"
+            else:
+                display_type = raw_type.capitalize()
+            
+            priority = get_type_priority(display_type)
+            
             # Key collision logic
             if norm_title not in deduped:
-                deduped[norm_title] = album
+                deduped[norm_title] = (album, display_type, priority, is_deluxe)
             else:
-                existing = deduped[norm_title]
-                existing_is_deluxe = any(kw in existing["name"].lower() for kw in DELUXE_KEYWORDS)
+                existing_album, existing_display, existing_priority, existing_is_deluxe = deduped[norm_title]
                 
-                # Prefer Deluxe
-                if is_deluxe and not existing_is_deluxe:
-                    deduped[norm_title] = album
-                # Prefer more tracks (we can't see track count in the simple list object easily 
-                # without total_tracks, so we use that)
-                elif is_deluxe == existing_is_deluxe:
-                    if album.get("total_tracks", 0) > existing.get("total_tracks", 0):
-                        deduped[norm_title] = album
+                replace = False
+                if priority < existing_priority:
+                    replace = True
+                elif priority == existing_priority:
+                    if is_deluxe and not existing_is_deluxe:
+                        replace = True
+                    elif is_deluxe == existing_is_deluxe:
+                        if total_tracks > existing_album.get("total_tracks", 0):
+                            replace = True
+                
+                if replace:
+                    deduped[norm_title] = (album, display_type, priority, is_deluxe)
 
         results = []
-        for album in deduped.values():
+        for album, display_type, _, _ in deduped.values():
             results.append({
-                "id": album["id"], # Spotify ID, not MBID
+                "id": album["id"],
                 "title": album["name"],
                 "artist": album["artists"][0]["name"] if album["artists"] else artist_name,
-                "type": album["album_type"].capitalize(), # "Album", "Single", "Compilation"
+                "type": display_type,
                 "cover_art": {
                     "front": True,
                     "url": album["images"][0]["url"] if album["images"] else None

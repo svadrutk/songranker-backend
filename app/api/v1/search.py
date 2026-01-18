@@ -260,3 +260,9 @@ async def get_tracks(
         raise HTTPException(status_code=404, detail="Tracks not found for this release group")
     
     return {"tracks": tracks}
+
+@router.get("/debug/flush")
+async def flush_cache():
+    """Wipe the in-memory cache for testing."""
+    cache._memory_cache = {}
+    return {"message": "Memory cache flushed successfully"}
