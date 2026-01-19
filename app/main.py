@@ -4,7 +4,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from app.api.v1 import search
+from app.api.v1 import search, sessions
 from app.core.config import settings
 from app.clients.supabase_db import supabase_client
 
@@ -62,6 +62,7 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.include_router(search.router, tags=["search"])
+app.include_router(sessions.router, tags=["sessions"])
 
 @app.get("/health")
 async def health_check():
