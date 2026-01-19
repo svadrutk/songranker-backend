@@ -56,15 +56,17 @@ class RankingManager:
         
         # Process comparisons
         for comp in comparisons:
-            s_a = str(comp.get("song_a_id"))
-            s_b = str(comp.get("song_b_id"))
-            winner = str(comp.get("winner_id")) if comp.get("winner_id") else None
-            is_tie = comp.get("is_tie", False)
+            s_a = str(comp.get("song_a_id", ""))
+            s_b = str(comp.get("song_b_id", ""))
+            winner = str(comp.get("winner_id", "")) if comp.get("winner_id") else None
+            is_tie = bool(comp.get("is_tie", False))
             
-            if s_a not in p or s_b not in p:
+            if not s_a or not s_b or s_a not in p or s_b not in p:
                 continue
             
-            pair = tuple(sorted((s_a, s_b)))
+            # Use sorted tuple as key for undirected pair
+            ids = sorted([s_a, s_b])
+            pair = (ids[0], ids[1])
             N[pair] = N.get(pair, 0) + 1
             
             if is_tie:
@@ -151,13 +153,10 @@ class RankingManager:
         stability_score: float,
         weight_quantity: float = 0.4,
         weight_stability: float = 0.6
-    ) -> int:
+    ) -> float:
         """
         Weighted average of Quantity and Quality.
-        Returns integer 0-100.
+        Returns float 0.0-1.0.
         """
-        # If quantity is low, stability is noisy, so we might dampen stability's impact?
-        # For now, simple weighted average as per plan.
-        
         raw_score = (quantity_score * weight_quantity) + (stability_score * weight_stability)
-        return int(min(100.0, raw_score * 100))
+        return min(1.0, raw_score)
