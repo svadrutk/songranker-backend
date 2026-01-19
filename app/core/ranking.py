@@ -153,10 +153,10 @@ class RankingManager:
         stability_score: float,
         weight_quantity: float = 0.4,
         weight_stability: float = 0.6
-    ) -> float:
+    ) -> int:
         """
         Weighted average of Quantity and Quality.
-        Returns float 0.0-1.0.
+        Returns integer 0-100.
         """
         raw_score = (quantity_score * weight_quantity) + (stability_score * weight_stability)
-        return min(1.0, raw_score)
+        return int(min(100.0, raw_score * 100))

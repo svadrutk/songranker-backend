@@ -38,7 +38,7 @@ class SessionDetail(BaseModel):
     session_id: UUID4
     songs: List[SessionSong]
     comparison_count: int
-    convergence: Optional[int] = None
+    convergence_score: Optional[int] = None
 
 class ComparisonCreate(BaseModel):
     song_a_id: UUID4
@@ -51,4 +51,4 @@ class ComparisonResponse(BaseModel):
     new_elo_a: float
     new_elo_b: float
     sync_queued: bool = False
-    convergence: Optional[int] = None
+    convergence_score: Optional[int] = None
