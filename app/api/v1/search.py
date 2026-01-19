@@ -201,12 +201,14 @@ async def get_tracks(
     title: Optional[str] = Query(None)
 ):
     """Fetch track titles with a parallelized race strategy and intelligent merging."""
+    logger.info(f"GET /tracks/{release_group_id} (artist={artist}, title={title})")
     client = request.app.state.http_client
     
     async def fetch_tracks():
+        logger.info(f"Starting fetch_tracks for {release_group_id}")
         # FAST PATH: Spotify ID Detection
-        # Spotify IDs are typically 22 alphanumeric chars. MBIDs are UUIDs (36 chars).
         if is_spotify_id(release_group_id):
+             logger.info(f"Spotify ID detected: {release_group_id}")
              if artist and title:
                  background_tasks.add_task(_resolve_mbid_background, artist, title, release_group_id, client)
              return await spotify_client.get_album_tracks(release_group_id, client=client)
@@ -261,8 +263,13 @@ async def get_tracks(
     
     return {"tracks": tracks}
 
+from collections import OrderedDict
+# ... existing imports ...
+
 @router.get("/debug/flush")
 async def flush_cache():
     """Wipe the in-memory cache for testing."""
-    cache._memory_cache = {}
+    from collections import OrderedDict
+    cache._memory_cache = OrderedDict()
     return {"message": "Memory cache flushed successfully"}
+

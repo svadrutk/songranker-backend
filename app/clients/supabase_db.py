@@ -1,7 +1,10 @@
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, cast
+import logging
 from supabase import create_async_client, AsyncClient
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 class SupabaseDB:
     def __init__(self):
@@ -23,7 +26,8 @@ class SupabaseDB:
         try:
             response = await client.table("rankings").select("*").eq("user_id", user_id).eq("release_id", release_id).execute()
             return cast(Dict[str, Any], response.data[0]) if response.data else None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to get ranking for {user_id}/{release_id}: {e}")
             return None
 
     async def get_cache(self, key: str) -> Optional[Dict[str, Any]]:
@@ -34,7 +38,8 @@ class SupabaseDB:
             if response.data:
                 return cast(Dict[str, Any], response.data[0])
             return None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Cache miss/error for {key}: {e}")
             return None
 
     async def set_cache(self, key: str, data: Any, expires_at: datetime):
@@ -47,8 +52,8 @@ class SupabaseDB:
                 "expires_at": expires_at.isoformat(),
                 "created_at": datetime.now(timezone.utc).isoformat()
             }).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to set cache for {key}: {e}")
 
     async def delete_expired_cache(self):
         """Delete cache entries that have been expired for more than 24 hours."""
@@ -58,7 +63,6 @@ class SupabaseDB:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
             await client.table("api_cache").delete().lt("expires_at", cutoff).execute()
         except Exception as e:
-            from app.core.cache import logger
             logger.error(f"Failed to delete expired cache: {e}")
 
 supabase_client = SupabaseDB()

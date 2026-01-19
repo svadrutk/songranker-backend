@@ -8,13 +8,26 @@ from app.api.v1 import search
 from app.core.config import settings
 from app.clients.supabase_db import supabase_client
 
+import logging
+import sys
+
+# Configure logging early
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
+
 async def cleanup_task():
     """Periodic background task to clean up expired cache from Supabase."""
+    logger.info("Starting periodic cache cleanup task")
     while True:
         try:
             await supabase_client.delete_expired_cache()
-        except Exception:
-            pass
+            logger.debug("Successfully completed cache cleanup cycle")
+        except Exception as e:
+            logger.error(f"Error in cache cleanup task: {e}")
         # Run every 6 hours
         await asyncio.sleep(6 * 3600)
 
