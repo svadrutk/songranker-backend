@@ -37,7 +37,7 @@ async def get_session_detail(session_id: UUID):
             session_id=session_id,
             songs=[SessionSong(**s) for s in songs],
             comparison_count=count,
-            convergence_score=details.get("convergence_score")
+            convergence=details.get("convergence_score")
         )
     except Exception as e:
         logger.error(f"Failed to fetch detail for session {session_id}: {e}")
@@ -99,14 +99,14 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
 
         # 5. Fetch current convergence to return in response
         details = await supabase_client.get_session_details(str(session_id))
-        convergence_score = details.get("convergence_score") or 0
+        convergence = details.get("convergence_score") or 0
 
         return ComparisonResponse(
             success=True,
             new_elo_a=new_elo_a,
             new_elo_b=new_elo_b,
             sync_queued=sync_queued,
-            convergence_score=convergence_score
+            convergence=convergence
         )
 
     except HTTPException:

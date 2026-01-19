@@ -1,4 +1,4 @@
-from pydantic import BaseModel, UUID4
+from pydantic import BaseModel, UUID4, Field
 from typing import List, Optional
 from datetime import datetime
 
@@ -38,7 +38,10 @@ class SessionDetail(BaseModel):
     session_id: UUID4
     songs: List[SessionSong]
     comparison_count: int
-    convergence_score: Optional[int] = None
+    convergence: Optional[int] = Field(None, alias="convergence_score")
+
+    class Config:
+        populate_by_name = True
 
 class ComparisonCreate(BaseModel):
     song_a_id: UUID4
@@ -51,4 +54,7 @@ class ComparisonResponse(BaseModel):
     new_elo_a: float
     new_elo_b: float
     sync_queued: bool = False
-    convergence_score: Optional[int] = None
+    convergence: Optional[int] = Field(None, alias="convergence_score")
+
+    class Config:
+        populate_by_name = True
