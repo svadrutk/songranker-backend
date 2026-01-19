@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     SPOTIFY_CLIENT_ID: str = ""
     SPOTIFY_CLIENT_SECRET: str = ""
     
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379/0"
+    
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
     
     @property

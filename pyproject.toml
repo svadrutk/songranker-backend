@@ -12,6 +12,8 @@ dependencies = [
     "uvicorn>=0.40.0",
     "supabase>=2.10.0",
     "rapidfuzz>=3.11.0",
+    "redis>=7.1.0",
+    "rq>=2.6.1",
 ]
 
 [dependency-groups]

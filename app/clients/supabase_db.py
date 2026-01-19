@@ -1,7 +1,8 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, cast, List
 import logging
 from supabase import create_async_client, AsyncClient
+from postgrest.types import CountMethod
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -29,31 +30,6 @@ class SupabaseDB:
         except Exception as e:
             logger.warning(f"Failed to get ranking for {user_id}/{release_id}: {e}")
             return None
-
-    async def get_cache(self, key: str) -> Optional[Dict[str, Any]]:
-        """Fetch a cache entry and return it if it exists (even if expired for SWR)."""
-        client = await self.get_client()
-        try:
-            response = await client.table("api_cache").select("*").eq("key", key).execute()
-            if response.data:
-                return cast(Dict[str, Any], response.data[0])
-            return None
-        except Exception as e:
-            logger.warning(f"Cache miss/error for {key}: {e}")
-            return None
-
-    async def set_cache(self, key: str, data: Any, expires_at: datetime):
-        """Upsert a cache entry."""
-        client = await self.get_client()
-        try:
-            await client.table("api_cache").upsert({
-                "key": key,
-                "data": data,
-                "expires_at": expires_at.isoformat(),
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }).execute()
-        except Exception as e:
-            logger.warning(f"Failed to set cache for {key}: {e}")
 
     async def bulk_upsert_songs(self, songs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -89,6 +65,47 @@ class SupabaseDB:
             
         return str(first_row.get("id"))
 
+    async def get_user_sessions(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get summarized sessions for a user using a optimized join.
+        This fetches sessions, counts, and primary artist in one query.
+        Note: Requires a session_summaries view or complex select.
+        """
+        client = await self.get_client()
+        
+        # We use a custom RPC or complex select to fetch everything in one go
+        # For now, we'll use a single select with embedded resources if possible,
+        # but Supabase join limits usually make a View or RPC better for complex counts.
+        # Here we'll call a dedicated RPC 'get_user_session_summaries'
+        response = await client.rpc("get_user_session_summaries", {
+            "p_user_id": user_id
+        }).execute()
+        data = cast(List[Dict[str, Any]], response.data or [])
+        if not isinstance(data, list):
+            return []
+
+        # Map the 'out_' prefixed columns back to expected names
+        return [
+            {
+                "session_id": s["out_session_id"],
+                "created_at": s["out_created_at"],
+                "primary_artist": s["out_primary_artist"],
+                "song_count": s["out_song_count"],
+                "comparison_count": s["out_comparison_count"]
+            }
+            for s in data
+        ]
+
+
+    async def get_session_comparison_count(self, session_id: str) -> int:
+        """Get the total number of comparisons for a session."""
+        client = await self.get_client()
+        response = await client.table("comparisons") \
+            .select("id", count=CountMethod.exact) \
+            .eq("session_id", session_id) \
+            .execute()
+        return response.count or 0
+
     async def link_session_songs(self, session_id: str, song_ids: List[str]):
         """Link a list of songs to a session."""
         client = await self.get_client()
@@ -96,21 +113,52 @@ class SupabaseDB:
         await client.table("session_songs").insert(links).execute()
 
     async def get_session_songs(self, session_id: str) -> List[Dict[str, Any]]:
-        """Get all songs associated with a session."""
+        """Get all songs associated with a session, including local_elo."""
         client = await self.get_client()
         response = await client.table("session_songs") \
-            .select("song_id, songs(*)") \
+            .select("song_id, local_elo, bt_strength, songs(*)") \
             .eq("session_id", session_id) \
             .execute()
         
-        results: List[Dict[str, Any]] = []
-        data = cast(List[Dict[str, Any]], response.data or [])
-        for item in data:
-            # Flatten song details
-            song_details = item.pop("songs", None)
-            if isinstance(song_details, dict):
-                results.append({**item, **song_details})
-        return results
+        return [{**item, **item.pop("songs")} for item in (response.data or []) if isinstance(item.get("songs"), dict)]
+
+    async def get_session_song_elos(self, session_id: str, song_ids: List[str]) -> List[Dict[str, Any]]:
+        """Get local_elo for specific songs in a session."""
+        client = await self.get_client()
+        response = await client.table("session_songs") \
+            .select("song_id, local_elo") \
+            .eq("session_id", session_id) \
+            .in_("song_id", song_ids) \
+            .execute()
+        return cast(List[Dict[str, Any]], response.data or [])
+
+    async def record_comparison_and_update_elo(
+        self, 
+        session_id: str, 
+        song_a_id: str, 
+        song_b_id: str, 
+        winner_id: Optional[str], 
+        is_tie: bool,
+        new_elo_a: float,
+        new_elo_b: float
+    ):
+        """
+        Record a comparison and update Elos in a single transaction-like block.
+        Ideally this would be a single RPC call to handle atomicity.
+        """
+        client = await self.get_client()
+        
+        # We use RPC for atomicity and efficiency
+        # This requires a 'record_duel' function to be defined in Supabase/Postgres
+        await client.rpc("record_duel", {
+            "p_session_id": session_id,
+            "p_song_a_id": song_a_id,
+            "p_song_b_id": song_b_id,
+            "p_winner_id": winner_id,
+            "p_is_tie": is_tie,
+            "p_new_elo_a": new_elo_a,
+            "p_new_elo_b": new_elo_b
+        }).execute()
 
     async def remove_session_song(self, session_id: str, song_id: str):
         """Remove a song from a session (used during deduplication)."""
@@ -119,6 +167,16 @@ class SupabaseDB:
             .delete() \
             .eq("session_id", session_id) \
             .eq("song_id", song_id) \
+            .execute()
+
+    async def delete_session(self, session_id: str):
+        """Delete a session and all its associated data."""
+        client = await self.get_client()
+        # We assume cascading deletes are handled by the database schema
+        # (comparisons and session_songs linked via ON DELETE CASCADE)
+        await client.table("sessions") \
+            .delete() \
+            .eq("id", session_id) \
             .execute()
 
     async def update_comparison_aliases(self, session_id: str, old_song_id: str, new_song_id: str):
@@ -135,15 +193,5 @@ class SupabaseDB:
             client.table("comparisons").update({"song_b_id": new_song_id})
                 .eq("session_id", session_id).eq("song_b_id", old_song_id).execute()
         )
-
-    async def delete_expired_cache(self):
-        """Delete cache entries that have been expired for more than 24 hours."""
-        client = await self.get_client()
-        try:
-            # SWR window is usually 24h, so we delete anything expired > 24h ago
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-            await client.table("api_cache").delete().lt("expires_at", cutoff).execute()
-        except Exception as e:
-            logger.error(f"Failed to delete expired cache: {e}")
 
 supabase_client = SupabaseDB()
