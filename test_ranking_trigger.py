@@ -21,9 +21,9 @@ class TestRankingTrigger(unittest.TestCase):
 
     @patch("app.api.v1.sessions.supabase_client")
     @patch("app.api.v1.sessions.task_queue")
-    def test_ranking_trigger_on_10th_duel(self, mock_queue, mock_supabase):
+    def test_ranking_trigger_on_5th_duel(self, mock_queue, mock_supabase):
         """
-        Verify that recording the 10th comparison triggers the background ranking task.
+        Verify that recording the 5th comparison triggers the background ranking task.
         """
         # Mock Supabase responses
         # 1. get_session_song_elos: Return some default elos
@@ -35,8 +35,8 @@ class TestRankingTrigger(unittest.TestCase):
         # 2. record_comparison_and_update_elo: succeed
         mock_supabase.record_comparison_and_update_elo = AsyncMock(return_value=None)
         
-        # 3. get_session_comparison_count: Return 10 to trigger logic
-        mock_supabase.get_session_comparison_count = AsyncMock(return_value=10)
+        # 3. get_session_comparison_count: Return 5 to trigger logic
+        mock_supabase.get_session_comparison_count = AsyncMock(return_value=5)
 
         # Payload
         payload = {
@@ -56,7 +56,7 @@ class TestRankingTrigger(unittest.TestCase):
         print(f"\nAPI Response: {data}")
         
         self.assertTrue(data["success"])
-        self.assertTrue(data["sync_queued"], "sync_queued should be True on 10th duel")
+        self.assertTrue(data["sync_queued"], "sync_queued should be True on 5th duel")
         
         # Verify queue enqueue was called
         mock_queue.enqueue.assert_called_once()
@@ -66,13 +66,13 @@ class TestRankingTrigger(unittest.TestCase):
         self.assertEqual(args[0], run_ranking_update)
         self.assertEqual(args[1], self.session_id)
         
-        print("✅ Success: Ranking update queued on 10th duel.")
+        print("✅ Success: Ranking update queued on 5th duel.")
 
     @patch("app.api.v1.sessions.supabase_client")
     @patch("app.api.v1.sessions.task_queue")
-    def test_ranking_no_trigger_on_9th_duel(self, mock_queue, mock_supabase):
+    def test_ranking_no_trigger_on_4th_duel(self, mock_queue, mock_supabase):
         """
-        Verify that recording the 9th comparison DOES NOT trigger the task.
+        Verify that recording the 4th comparison DOES NOT trigger the task.
         """
         mock_supabase.get_session_song_elos = AsyncMock(return_value=[
             {"song_id": self.song_a_id, "local_elo": 1500},
@@ -80,8 +80,8 @@ class TestRankingTrigger(unittest.TestCase):
         ])
         mock_supabase.record_comparison_and_update_elo = AsyncMock(return_value=None)
         
-        # Return 9 (not divisible by 10)
-        mock_supabase.get_session_comparison_count = AsyncMock(return_value=9)
+        # Return 4 (not divisible by 5)
+        mock_supabase.get_session_comparison_count = AsyncMock(return_value=4)
 
         payload = {
             "song_a_id": self.song_a_id,
@@ -95,10 +95,10 @@ class TestRankingTrigger(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         
-        self.assertFalse(data["sync_queued"], "sync_queued should be False on 9th duel")
+        self.assertFalse(data["sync_queued"], "sync_queued should be False on 4th duel")
         mock_queue.enqueue.assert_not_called()
         
-        print("✅ Success: Ranking update skipped on 9th duel.")
+        print("✅ Success: Ranking update skipped on 4th duel.")
 
 if __name__ == "__main__":
     unittest.main()

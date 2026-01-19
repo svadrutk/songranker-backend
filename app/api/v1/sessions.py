@@ -90,10 +90,10 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
             new_elo_b
         )
 
-        # 4. Trigger Ranking Update (every 10 duels)
+        # 4. Trigger Ranking Update (every 5 duels)
         count = await supabase_client.get_session_comparison_count(str(session_id))
         sync_queued = False
-        if count > 0 and count % 10 == 0:
+        if count > 0 and count % 5 == 0:
             task_queue.enqueue(run_ranking_update, str(session_id))
             sync_queued = True
 

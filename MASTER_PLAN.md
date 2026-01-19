@@ -15,7 +15,7 @@ Song Ranker is an interactive web application for ranking songs through pairwise
 - **Framework**: FastAPI (Python), Supabase (PostgreSQL).
 - **Deep Deduplication**: Asynchronous background task using `RapidFuzz` for intensive matching across the session's song set.
 - **Ranking Engine**: **Bradley-Terry MM (Minorization-Maximization) Algorithm**.
-- **Model Sync**: Computes updated strength parameters ($p_i$) every 10–15 duels and returns them to the frontend to calibrate the "Official Ranking."
+- **Model Sync**: Computes updated strength parameters ($p_i$) every 5 duels and returns them to the frontend to calibrate the "Official Ranking."
 
 ---
 
@@ -42,7 +42,7 @@ Song Ranker is an interactive web application for ranking songs through pairwise
 
 ### Phase 4: Bradley-Terry & Model Sync (Backend)
 - **Algorithm**: Implement Bradley-Terry MM in the backend.
-- **Trigger**: Run calculation every 10–15 duels.
+- **Trigger**: Run calculation every 5 duels.
 - **Sync**: Return BT strengths to frontend; recalibrate local Elo ratings to match BT ordering.
 
 ### Phase 5: Results & Polish

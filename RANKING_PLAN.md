@@ -29,11 +29,11 @@ Implement a robust statistical ranking system using the Bradley-Terry model, pro
 
 ### 4. API Layer (`app/api/v1/sessions.py`)
 - Modify `create_comparison`:
-    - Check `total_duels % 10 == 0`.
+    - Check `total_duels % 5 == 0`.
     - Enqueue `run_ranking_update` if true.
     - Return `sync_queued: boolean` and current `convergence_score`.
 
 ## 📈 Success Criteria
 - BT Model converges in < 100ms for 100 songs.
 - Elo ratings stay centered at 1500.
-- Worker correctly processes 10-duel batches without dropping tasks.
+- Worker correctly processes 5-duel batches without dropping tasks.
