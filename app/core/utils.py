@@ -26,14 +26,17 @@ def is_spotify_id(resource_id: str) -> bool:
     """Check if the ID looks like a Spotify ID (22 chars, alphanumeric)."""
     return len(resource_id) == 22 and "-" not in resource_id and ":" not in resource_id
 
+_PARENT_PATTERN = re.compile(r'[\(\[\{].*?[\)\]\}]')
+_NON_ALPHANUM_PATTERN = re.compile(r'[^a-z0-9]')
+
 def normalize_title(title: str) -> str:
     if not title:
         return ""
     # Remove parenthetical info which often contains "Deluxe Edition"
     base = title.lower()
-    base = re.sub(r'[\(\[\{].*?[\)\]\}]', '', base)
+    base = _PARENT_PATTERN.sub('', base)
     # Remove non-alphanumeric
-    return re.sub(r'[^a-z0-9]', '', base).strip()
+    return _NON_ALPHANUM_PATTERN.sub('', base).strip()
 
 def get_type_priority(rg_type: str) -> int:
     if rg_type == "Album":

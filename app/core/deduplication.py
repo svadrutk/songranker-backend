@@ -1,12 +1,32 @@
 import logging
 from itertools import combinations
-from typing import List, Dict, Any
-from rapidfuzz import fuzz
+from typing import Dict, Any
+import difflib
 from app.clients.supabase_db import supabase_client
 
 logger = logging.getLogger(__name__)
 
 SIMILARITY_THRESHOLD = 92.0
+
+def _token_sort_ratio(s1: str, s2: str) -> float:
+    """
+    Pure Python implementation of token_sort_ratio using difflib.
+    Returns score 0-100.
+    """
+    if not s1 or not s2:
+        return 0.0
+    
+    # 1. Tokenize (lower case, split by whitespace)
+    tokens1 = sorted(str(s1).lower().split())
+    tokens2 = sorted(str(s2).lower().split())
+    
+    # 2. Reconstruct strings
+    t1 = " ".join(tokens1)
+    t2 = " ".join(tokens2)
+    
+    # 3. Ratio
+    # difflib.SequenceMatcher.ratio() returns float [0, 1]
+    return difflib.SequenceMatcher(None, t1, t2).ratio() * 100.0
 
 async def deep_deduplicate_session(session_id: str):
     """
@@ -34,7 +54,7 @@ async def deep_deduplicate_session(session_id: str):
                 continue
 
             # Calculate similarity between normalized names
-            score = fuzz.token_sort_ratio(song_a["normalized_name"], song_b["normalized_name"])
+            score = _token_sort_ratio(song_a["normalized_name"], song_b["normalized_name"])
             
             if score >= SIMILARITY_THRESHOLD:
                 logger.info(f"Auto-merging duplicates in session {session_id}: '{song_a['name']}' and '{song_b['name']}' (Score: {score})")

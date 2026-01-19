@@ -11,6 +11,7 @@ from app.clients.lastfm import lastfm_client
 from app.clients.spotify import spotify_client
 from app.core.utils import normalize_title, is_spotify_id, DELUXE_KEYWORDS, SKIP_KEYWORDS
 from app.core.cache import cache
+from app.core.limiter import limiter
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ def _merge_results(lastfm_albums: List[Dict], mb_release_groups: List[Dict], def
     return list(results_map.values())
 
 @router.get("/search", response_model=List[ReleaseGroupResponse])
+@limiter.limit("30/minute")
 async def search(request: Request, background_tasks: BackgroundTasks, query: str = Query(..., min_length=1)):
     client = request.app.state.http_client
     
@@ -238,7 +240,8 @@ async def get_tracks(
                 info = await musicbrainz_client.get_release_group_info(release_group_id, client=client)
                 if info.get("artist") and info.get("title"):
                     res = await lastfm_client.get_album_tracks(f"{info['artist']}:{info['title']}", client=client)
-                    if res: return res
+                    if res:
+                        return res
             except Exception:
                 pass
 
@@ -262,9 +265,6 @@ async def get_tracks(
         raise HTTPException(status_code=404, detail="Tracks not found for this release group")
     
     return {"tracks": tracks}
-
-from collections import OrderedDict
-# ... existing imports ...
 
 @router.get("/debug/flush")
 async def flush_cache():

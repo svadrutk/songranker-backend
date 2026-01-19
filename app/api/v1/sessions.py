@@ -1,12 +1,13 @@
 import logging
 import asyncio
 from typing import List
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from app.schemas.session import SessionCreate, SessionResponse, SessionSong, ComparisonCreate, ComparisonResponse, SessionSummary, SessionDetail
 from app.clients.supabase_db import supabase_client
 from app.core.utils import normalize_title, calculate_elo
 from app.core.queue import task_queue
-from app.tasks import run_deep_deduplication
+from app.tasks import run_deep_deduplication, run_ranking_update
+from app.core.limiter import limiter
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
@@ -27,14 +28,16 @@ async def get_user_sessions(user_id: UUID):
 async def get_session_detail(session_id: UUID):
     """Retrieve session metadata, songs, and comparison count."""
     try:
-        songs, count = await asyncio.gather(
+        songs, count, details = await asyncio.gather(
             supabase_client.get_session_songs(str(session_id)),
-            supabase_client.get_session_comparison_count(str(session_id))
+            supabase_client.get_session_comparison_count(str(session_id)),
+            supabase_client.get_session_details(str(session_id))
         )
         return SessionDetail(
             session_id=session_id,
             songs=[SessionSong(**s) for s in songs],
-            comparison_count=count
+            comparison_count=count,
+            convergence_score=details.get("convergence_score")
         )
     except Exception as e:
         logger.error(f"Failed to fetch detail for session {session_id}: {e}")
@@ -87,10 +90,23 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
             new_elo_b
         )
 
+        # 4. Trigger Ranking Update (every 10 duels)
+        count = await supabase_client.get_session_comparison_count(str(session_id))
+        sync_queued = False
+        if count > 0 and count % 10 == 0:
+            task_queue.enqueue(run_ranking_update, str(session_id))
+            sync_queued = True
+
+        # 5. Fetch current convergence to return in response
+        details = await supabase_client.get_session_details(str(session_id))
+        convergence_score = details.get("convergence_score") or 0
+
         return ComparisonResponse(
             success=True,
             new_elo_a=new_elo_a,
-            new_elo_b=new_elo_b
+            new_elo_b=new_elo_b,
+            sync_queued=sync_queued,
+            convergence_score=convergence_score
         )
 
     except HTTPException:
@@ -100,7 +116,8 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/sessions", response_model=SessionResponse)
-async def create_session(session_data: SessionCreate, background_tasks: BackgroundTasks):
+@limiter.limit("10/minute")
+async def create_session(request: Request, session_data: SessionCreate, background_tasks: BackgroundTasks):
     """
     Initialize a ranking session.
     1. Normalizes song titles.

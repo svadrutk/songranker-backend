@@ -26,8 +26,8 @@ class SessionSummary(BaseModel):
 
 class SessionSong(BaseModel):
     song_id: UUID4
-    name: str
-    artist: str
+    name: Optional[str] = "Unknown Track"
+    artist: Optional[str] = "Unknown Artist"
     album: Optional[str] = None
     spotify_id: Optional[str] = None
     cover_url: Optional[str] = None
@@ -38,6 +38,7 @@ class SessionDetail(BaseModel):
     session_id: UUID4
     songs: List[SessionSong]
     comparison_count: int
+    convergence_score: Optional[int] = None
 
 class ComparisonCreate(BaseModel):
     song_a_id: UUID4
@@ -49,3 +50,5 @@ class ComparisonResponse(BaseModel):
     success: bool
     new_elo_a: float
     new_elo_b: float
+    sync_queued: bool = False
+    convergence_score: Optional[int] = None

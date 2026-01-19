@@ -105,7 +105,8 @@ class SpotifyClient:
         
         for album in albums:
             title = album.get("name", "")
-            if not title: continue
+            if not title:
+                continue
             
             # Skip noise
             if any(kw in title.lower() for kw in SKIP_KEYWORDS):
@@ -196,7 +197,8 @@ class SpotifyClient:
         
         for t in tracks:
             name = t.get("name", "")
-            if not name: continue
+            if not name:
+                continue
             
             # Spotify doesn't have as much junk as MB, but still good to check
             lower = name.lower()

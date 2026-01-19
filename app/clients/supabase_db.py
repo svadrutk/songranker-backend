@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import Dict, Any, Optional, cast, List
 import logging
 from supabase import create_async_client, AsyncClient
@@ -109,28 +108,85 @@ class SupabaseDB:
     async def link_session_songs(self, session_id: str, song_ids: List[str]):
         """Link a list of songs to a session."""
         client = await self.get_client()
-        links = [{"session_id": session_id, "song_id": sid} for sid in song_ids]
-        await client.table("session_songs").insert(links).execute()
+        links = [{"session_id": str(session_id), "song_id": str(sid)} for sid in song_ids]
+        try:
+            response = await client.table("session_songs").insert(links).execute()
+            if not response.data:
+                logger.error(f"Failed to link songs: No data returned. Possible RLS or Schema issue.")
+        except Exception as e:
+            logger.error(f"CRITICAL: Failed to link songs to session {session_id}: {e}")
+            raise
 
     async def get_session_songs(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all songs associated with a session, including local_elo."""
         client = await self.get_client()
-        response = await client.table("session_songs") \
-            .select("song_id, local_elo, bt_strength, songs(*)") \
-            .eq("session_id", session_id) \
-            .execute()
-        
-        return [{**item, **item.pop("songs")} for item in (response.data or []) if isinstance(item.get("songs"), dict)]
+        try:
+            res = await client.table("session_songs") \
+                .select("song_id, local_elo, bt_strength, songs(*)") \
+                .eq("session_id", str(session_id)) \
+                .execute()
+            
+            if not res.data or not isinstance(res.data, list):
+                return []
+            
+            results = []
+            for item in (res.data or []):
+                if not isinstance(item, dict):
+                    continue
+                
+                # Handle nested join response which can be a dict or a list of dicts
+                songs_data = item.get("songs")
+                if not songs_data:
+                    continue
+                
+                details = songs_data[0] if isinstance(songs_data, list) else songs_data
+                if not isinstance(details, dict):
+                    continue
+                
+                # Merge session-specific stats with global song details
+                results.append({
+                    "song_id": str(item.get("song_id", "")),
+                    "local_elo": item.get("local_elo", 1500.0),
+                    "bt_strength": item.get("bt_strength"),
+                    **{k: v for k, v in details.items() if k != "id"}
+                })
+
+            return results
+        except Exception as e:
+            logger.error(f"Database error in get_session_songs: {e}")
+            return []
+
+    async def get_session_details(self, session_id: str) -> Dict[str, Any]:
+        """Get session metadata including convergence."""
+        client = await self.get_client()
+        try:
+            response = await client.table("sessions") \
+                .select("*") \
+                .eq("id", str(session_id)) \
+                .maybe_single() \
+                .execute()
+            
+            if response and hasattr(response, "data") and response.data:
+                return cast(Dict[str, Any], response.data)
+            return {}
+        except Exception as e:
+            logger.error(f"Database error in get_session_details: {e}")
+            return {}
 
     async def get_session_song_elos(self, session_id: str, song_ids: List[str]) -> List[Dict[str, Any]]:
         """Get local_elo for specific songs in a session."""
         client = await self.get_client()
-        response = await client.table("session_songs") \
-            .select("song_id, local_elo") \
-            .eq("session_id", session_id) \
-            .in_("song_id", song_ids) \
-            .execute()
-        return cast(List[Dict[str, Any]], response.data or [])
+        try:
+            # song_ids should be a list of strings (UUIDs)
+            response = await client.table("session_songs") \
+                .select("song_id, local_elo") \
+                .eq("session_id", str(session_id)) \
+                .in_("song_id", [str(sid) for sid in song_ids]) \
+                .execute()
+            return cast(List[Dict[str, Any]], response.data or [])
+        except Exception as e:
+            logger.error(f"Error in get_session_song_elos: {e}")
+            return []
 
     async def record_comparison_and_update_elo(
         self, 
@@ -159,6 +215,44 @@ class SupabaseDB:
             "p_new_elo_a": new_elo_a,
             "p_new_elo_b": new_elo_b
         }).execute()
+
+
+    async def get_session_comparisons(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get all raw duel results for a session."""
+        client = await self.get_client()
+        response = await client.table("comparisons") \
+            .select("song_a_id, song_b_id, winner_id, is_tie") \
+            .eq("session_id", session_id) \
+            .execute()
+        return cast(List[Dict[str, Any]], response.data or [])
+
+    async def update_session_ranking(
+        self, 
+        session_id: str, 
+        updates: List[Dict[str, Any]],
+        convergence_score: int
+    ):
+        """
+        Bulk update song rankings and session convergence.
+        
+        updates: List of dicts with {song_id, bt_strength, local_elo}
+        """
+        client = await self.get_client()
+        
+        # 1. Update session songs (bulk upsert is efficient)
+        # We need to include session_id in the updates to match the composite key (session_id, song_id)
+        if updates:
+            enriched_updates = [{**u, "session_id": session_id} for u in updates]
+            await client.table("session_songs").upsert(
+                enriched_updates,
+                on_conflict="session_id,song_id"
+            ).execute()
+            
+        # 2. Update session convergence
+        await client.table("sessions").update({
+            "convergence_score": convergence_score,
+            "last_active_at": "now()"
+        }).eq("id", session_id).execute()
 
     async def remove_session_song(self, session_id: str, song_id: str):
         """Remove a song from a session (used during deduplication)."""

@@ -2,11 +2,11 @@ import asyncio
 import json
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Optional, TypeVar, Generic, cast
+from typing import Any, Callable, Dict, Optional, TypeVar
 import logging
 from fastapi import BackgroundTasks
 
-from app.core.queue import redis_conn
+from app.core.queue import get_async_redis
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,8 @@ class HybridCache:
             "data": data,
             "expires_at": expires_at.isoformat()
         }
-        await redis_conn.set(f"cache:{key}", json.dumps(entry), ex=redis_ttl)
+        redis = get_async_redis()
+        await redis.set(f"cache:{key}", json.dumps(entry), ex=redis_ttl)
 
     async def get_or_fetch(
         self,
@@ -80,7 +81,8 @@ class HybridCache:
 
         try:
             # 3. Check Redis
-            cached_val = await redis_conn.get(f"cache:{key}")
+            redis = get_async_redis()
+            cached_val = await redis.get(f"cache:{key}")
             if cached_val:
                 entry = json.loads(cached_val)
                 data, expires_at_str = entry.get("data"), entry.get("expires_at")

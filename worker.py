@@ -1,4 +1,8 @@
 #!/usr/bin/env python
+import os
+# Fix for macOS fork safety issue with OBJC - must be set before other imports
+os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+
 from rq import Worker
 from app.core.queue import sync_redis_conn
 
