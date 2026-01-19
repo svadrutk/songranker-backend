@@ -1,4 +1,5 @@
 import logging
+from itertools import combinations
 from typing import List, Dict, Any
 from rapidfuzz import fuzz
 from app.clients.supabase_db import supabase_client
@@ -19,7 +20,6 @@ async def deep_deduplicate_session(session_id: str):
         if len(songs) < 2:
             return
 
-        from itertools import combinations
         removed_ids = set()
         
         # Compare all unique pairs
@@ -53,12 +53,12 @@ async def deep_deduplicate_session(session_id: str):
 
 def _decide_canonical(song_a: Dict[str, Any], song_b: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """Decide which song to keep as the canonical version based on Spotify ID, Album, and name length."""
-    a_score = (1 if song_a.get("spotify_id") else 0) + (1 if song_a.get("album") else 0)
-    b_score = (1 if song_b.get("spotify_id") else 0) + (1 if song_b.get("album") else 0)
+    def get_score(s):
+        return sum(1 for field in ("spotify_id", "album") if s.get(field))
 
-    if a_score > b_score:
-        return song_a, song_b
-    if b_score > a_score:
-        return song_b, song_a
+    score_a, score_b = get_score(song_a), get_score(song_b)
+
+    if score_a != score_b:
+        return (song_a, song_b) if score_a > score_b else (song_b, song_a)
         
     return (song_a, song_b) if len(song_a["name"]) <= len(song_b["name"]) else (song_b, song_a)
