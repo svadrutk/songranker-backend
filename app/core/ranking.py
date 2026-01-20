@@ -82,33 +82,39 @@ class RankingManager:
             W[sid] += 0.5
             
         # MM Iteration
+        actual_iterations = 0
         for _ in range(iterations):
+            actual_iterations += 1
             sums = {sid: 0.0 for sid in song_ids}
-            
+
             for (id1, id2), count in N.items():
                 denom = p[id1] + p[id2]
                 if denom > 0:
                     val = count / denom
                     sums[id1] += val
                     sums[id2] += val
-            
+
             max_diff = 0.0
             new_p = {}
             for sid in song_ids:
                 # Update rule: p_i = W_i / sum(N_ij / (p_i + p_j))
                 new_p[sid] = W[sid] / sums[sid] if sums[sid] > 0 else p[sid]
                 max_diff = max(max_diff, abs(new_p[sid] - p[sid]))
-            
+
             p = new_p
-            
+
             # Normalize to keep values stable (geometric mean = 1)
             log_sum = sum(math.log(max(1e-10, x)) for x in p.values())
             gm = math.exp(log_sum / n)
             p = {k: v / gm for k, v in p.items()}
-            
+
             if max_diff < tolerance:
                 break
-                
+
+        # Log actual iterations for monitoring
+        import logging
+        logging.info(f"Bradley-Terry converged in {actual_iterations} iterations (max: {iterations}, tolerance: {tolerance})")
+
         return p
 
     @staticmethod

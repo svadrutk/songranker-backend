@@ -87,50 +87,76 @@ async def _fetch_release_data(artist_name: str, artist_mbid: Optional[str], clie
     
     return _merge_results(lastfm_res, mb_res, artist_name)
 
-def _merge_results(lastfm_albums: List[Dict], mb_release_groups: List[Dict], default_artist: str):
-    """Merge and deduplicate results from both sources."""
-    mb_lookup = {normalize_title(rg["title"]): rg for rg in mb_release_groups if normalize_title(rg["title"])}
+def _should_skip_title(title: str) -> bool:
+    """Check if title contains keywords that should be excluded."""
+    return any(kw in title.lower() for kw in SKIP_KEYWORDS)
+
+def _is_deluxe_title(title: str) -> bool:
+    """Check if title indicates a Deluxe edition."""
+    return any(kw in title.lower() for kw in DELUXE_KEYWORDS)
+
+def _create_album_entry(album: Dict, mb_entry: Optional[Dict], mbid: str, default_artist: str) -> Dict:
+    """Create a standardized album entry object."""
+    return {
+        "id": mbid,
+        "title": album["title"],
+        "artist": album.get("artist") or default_artist,
+        "type": mb_entry["type"] if mb_entry else "Album",
+        "cover_art": {
+            "front": bool(album["image_url"]),
+            "url": album["image_url"]
+        }
+    }
+
+def _merge_results(lastfm_albums: List[Dict], mb_release_groups: List[Dict], default_artist: str) -> List[Dict]:
+    """
+    Merge and deduplicate results from both sources with specific preference rules:
+    1. Filter out skipped keywords
+    2. Match Last.fm albums to MusicBrainz entries by normalized title
+    3. Deduplicate by MBID (keeping the first one seen)
+    4. Handle title collisions: Prefer Deluxe editions if available
+    """
+    # Index MusicBrainz results for O(1) lookup
+    mb_lookup = {
+        normalize_title(rg["title"]): rg 
+        for rg in mb_release_groups 
+        if normalize_title(rg["title"])
+    }
     
-    results_map = {}
-    seen_mbids = set()
+    results_by_title: Dict[str, Dict] = {}
+    seen_mbids: set[str] = set()
 
     for album in lastfm_albums:
         title = album["title"]
-        if any(kw in title.lower() for kw in SKIP_KEYWORDS):
+        if _should_skip_title(title):
             continue
 
         norm_title = normalize_title(title)
         mb_entry = mb_lookup.get(norm_title)
-        mbid = album["mbid"] or (mb_entry["id"] if mb_entry else None)
         
+        # Determine MBID: prioritize explicit Last.fm MBID, fallback to MB lookup
+        mbid = album.get("mbid") or (mb_entry["id"] if mb_entry else None)
+        
+        # Skip if no ID or if ID already processed (duplicates)
         if not mbid or mbid in seen_mbids:
             continue
-        
-        is_deluxe = any(kw in title.lower() for kw in DELUXE_KEYWORDS)
-        new_entry = {
-            "id": mbid,
-            "title": title,
-            "artist": album.get("artist") or default_artist,
-            "type": mb_entry["type"] if mb_entry else "Album", 
-            "cover_art": {
-                "front": bool(album["image_url"]),
-                "url": album["image_url"]
-            }
-        }
-
-        if norm_title not in results_map:
-            results_map[norm_title] = new_entry
-            seen_mbids.add(mbid)
-        else:
-            existing = results_map[norm_title]
-            existing_is_deluxe = any(kw in existing["title"].lower() for kw in DELUXE_KEYWORDS)
             
-            if is_deluxe and not existing_is_deluxe:
-                seen_mbids.remove(existing["id"])
-                results_map[norm_title] = new_entry
-                seen_mbids.add(mbid)
+        new_entry = _create_album_entry(album, mb_entry, mbid, default_artist)
+        
+        # Case 1: New title - add it
+        if norm_title not in results_by_title:
+            results_by_title[norm_title] = new_entry
+            seen_mbids.add(mbid)
+            continue
+            
+        # Case 2: Existing title - check if we should upgrade to Deluxe
+        existing_entry = results_by_title[norm_title]
+        if _is_deluxe_title(title) and not _is_deluxe_title(existing_entry["title"]):
+            seen_mbids.remove(existing_entry["id"])
+            results_by_title[norm_title] = new_entry
+            seen_mbids.add(mbid)
     
-    return list(results_map.values())
+    return list(results_by_title.values())
 
 @router.get("/search", response_model=List[ReleaseGroupResponse])
 @limiter.limit("30/minute")
@@ -194,6 +220,37 @@ async def _search_fallback(query: str, client: httpx.AsyncClient):
     except Exception:
         return []
 
+async def _fetch_tracks_parallel(
+    release_group_id: str, 
+    artist: Optional[str], 
+    title: Optional[str], 
+    client: httpx.AsyncClient
+) -> List[List[str]]:
+    """Fetch tracks from multiple sources in parallel."""
+    tasks = [
+        lastfm_client.get_album_tracks(release_group_id, client=client),
+        musicbrainz_client.get_release_group_tracks(release_group_id, client=client)
+    ]
+    
+    if artist and title:
+        custom_id = f"{artist}:{title}"
+        tasks.append(lastfm_client.get_album_tracks(custom_id, client=client))
+        
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [r for r in results if isinstance(r, list) and len(r) > 0]
+
+
+async def _fetch_tracks_fallback(release_group_id: str, client: httpx.AsyncClient) -> Optional[List[str]]:
+    """Try to resolve release group info and search Last.fm by name as a last resort."""
+    try:
+        info = await musicbrainz_client.get_release_group_info(release_group_id, client=client)
+        if info.get("artist") and info.get("title"):
+             return await lastfm_client.get_album_tracks(f"{info['artist']}:{info['title']}", client=client)
+    except Exception as e:
+        logger.debug(f"Fallback search failed for {release_group_id}: {e}")
+    return None
+
+
 @router.get("/tracks/{release_group_id}", response_model=TrackResponse)
 async def get_tracks(
     request: Request, 
@@ -206,53 +263,30 @@ async def get_tracks(
     logger.info(f"GET /tracks/{release_group_id} (artist={artist}, title={title})")
     client = request.app.state.http_client
     
-    async def fetch_tracks():
+    async def fetch_tracks() -> Optional[List[str]]:
         logger.info(f"Starting fetch_tracks for {release_group_id}")
-        # FAST PATH: Spotify ID Detection
+        
+        # 1. Fast Path: Spotify ID Detection
         if is_spotify_id(release_group_id):
              logger.info(f"Spotify ID detected: {release_group_id}")
              if artist and title:
                  background_tasks.add_task(_resolve_mbid_background, artist, title, release_group_id, client)
              return await spotify_client.get_album_tracks(release_group_id, client=client)
 
-        # Prepare parallel tasks
-        tasks = []
+        # 2. Parallel Strategy
+        valid_results = await _fetch_tracks_parallel(release_group_id, artist, title, client)
         
-        # Task 1: Last.fm by MBID
-        tasks.append(lastfm_client.get_album_tracks(release_group_id, client=client))
-        
-        # Task 2: MusicBrainz (usually slower due to rate limiting)
-        tasks.append(musicbrainz_client.get_release_group_tracks(release_group_id, client=client))
-        
-        # Task 3: If we have artist/title, try Last.fm by name immediately
-        if artist and title:
-            custom_id = f"{artist}:{title}"
-            tasks.append(lastfm_client.get_album_tracks(custom_id, client=client))
-        
-        # Run all attempts in parallel
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        valid_results = [r for r in results if isinstance(r, list) and len(r) > 0]
-        
+        # 3. Fallback Strategy
         if not valid_results and not (artist and title):
-            # Final desperate attempt: Resolve name then try Last.fm
-            try:
-                info = await musicbrainz_client.get_release_group_info(release_group_id, client=client)
-                if info.get("artist") and info.get("title"):
-                    res = await lastfm_client.get_album_tracks(f"{info['artist']}:{info['title']}", client=client)
-                    if res:
-                        return res
-            except Exception:
-                pass
+            fallback_res = await _fetch_tracks_fallback(release_group_id, client)
+            if fallback_res:
+                valid_results.append(fallback_res)
 
         if not valid_results:
             return None
 
-        # Intelligent Merging: Pick the "best" result
-        # Best = most tracks (usually indicates a Deluxe/Complete version)
-        # unless it's suspiciously large or looks like duplicates (already handled by clients)
-        best_result = max(valid_results, key=len)
-        return best_result
+        # 4. Intelligent Merging: Pick the "best" result (most tracks)
+        return max(valid_results, key=len)
 
     tracks = await cache.get_or_fetch(
         f"tracks:{release_group_id}",
