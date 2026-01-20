@@ -23,8 +23,8 @@ class RankingManager:
     def compute_bradley_terry(
         song_ids: List[str],
         comparisons: List[Dict],
-        iterations: int = 20,
-        tolerance: float = 1e-4
+        iterations: int = 100,
+        tolerance: float = 1e-6
     ) -> Dict[str, float]:
         """
         Iterative MM algorithm to solve for song strengths (p).
@@ -131,28 +131,43 @@ class RankingManager:
         top_n: int = 10
     ) -> float:
         """
-        Quality Score: Stability of the Top N list.
-        Jaccard index or similar overlap metric of the top N songs.
+        Quality Score: Stability of the Top N list using weighted Rank Correlation.
+        Considers both membership and the specific order of the top tracks.
         """
         if not prev_ranking or not curr_ranking:
             return 0.0
             
-        top_prev = set(prev_ranking[:top_n])
-        top_curr = set(curr_ranking[:top_n])
+        p_top = prev_ranking[:top_n]
+        c_top = curr_ranking[:top_n]
         
-        if not top_prev:
+        if not p_top:
             return 0.0
-            
-        intersection = len(top_prev.intersection(top_curr))
-        # Simple overlap ratio for top N stability
-        return intersection / len(top_prev)
+
+        # 1. Membership Score (Jaccard-ish)
+        intersection = set(p_top).intersection(set(c_top))
+        membership_score = len(intersection) / top_n
+
+        # 2. Position Score (How many stayed in the exact same spot)
+        # We give more weight to higher positions (1st place is more important than 10th)
+        position_score = 0.0
+        total_weight = 0.0
+        for i in range(min(len(p_top), len(c_top))):
+            weight = (top_n - i) / top_n
+            total_weight += weight
+            if p_top[i] == c_top[i]:
+                position_score += weight
+        
+        normalized_position_score = position_score / total_weight if total_weight > 0 else 0.0
+
+        # Final stability is a mix: 40% membership, 60% order
+        return (membership_score * 0.4) + (normalized_position_score * 0.6)
 
     @staticmethod
     def calculate_final_convergence(
         quantity_score: float, 
         stability_score: float,
-        weight_quantity: float = 0.4,
-        weight_stability: float = 0.6
+        weight_quantity: float = 0.5,
+        weight_stability: float = 0.5
     ) -> int:
         """
         Weighted average of Quantity and Quality.

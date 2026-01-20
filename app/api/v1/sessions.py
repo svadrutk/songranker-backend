@@ -78,8 +78,15 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
             raise HTTPException(status_code=404, detail="One or both songs not found in session")
 
         # 2. Calculate new Elos
-        score_a = 0.5 if comparison.is_tie else (1.0 if str(comparison.winner_id) == id_a else 0.0)
-        new_elo_a, new_elo_b = calculate_elo(elo_map[id_a], elo_map[id_b], score_a)
+        if not comparison.winner_id and not comparison.is_tie:
+            # Skip: Penalize both songs (double loss)
+            # This aligns with the Bradley-Terry behavior where N is incremented but W is not.
+            # We calculate what they WOULD have lost if they both lost.
+            new_elo_a, _ = calculate_elo(elo_map[id_a], elo_map[id_b], 0.0)
+            _, new_elo_b = calculate_elo(elo_map[id_a], elo_map[id_b], 1.0) # 1.0 here because calculate_elo returns new_b for (1 - score_a)
+        else:
+            score_a = 0.5 if comparison.is_tie else (1.0 if str(comparison.winner_id) == id_a else 0.0)
+            new_elo_a, new_elo_b = calculate_elo(elo_map[id_a], elo_map[id_b], score_a)
 
         # 3. Persist comparison and updated Elos in one atomic operation
         await supabase_client.record_comparison_and_update_elo(
