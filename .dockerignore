@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.git
+.env
+.venv
+uv.lock
+test_*.py
+tests/
+scripts/
+*.md
