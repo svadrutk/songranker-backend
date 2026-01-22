@@ -29,5 +29,5 @@ COPY . .
 EXPOSE 8000
 
 # Run the application
-# Railway passes the PORT env var, but gunicorn needs it explicitly passed or we rely on the shell expansion
-CMD sh -c "gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120 --keep-alive 5"
+# We run both the web server and the background worker in the same container for simplicity on Railway
+CMD sh -c "python worker.py & gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120 --keep-alive 5"
