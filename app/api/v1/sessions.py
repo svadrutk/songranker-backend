@@ -78,15 +78,17 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
             raise HTTPException(status_code=404, detail="One or both songs not found in session")
 
         # 2. Calculate new Elos
+        elo_a, elo_b = elo_map[id_a], elo_map[id_b]
+        
         if not comparison.winner_id and not comparison.is_tie:
-            # Skip: Penalize both songs (double loss)
-            # This aligns with the Bradley-Terry behavior where N is incremented but W is not.
-            # We calculate what they WOULD have lost if they both lost.
-            new_elo_a, _ = calculate_elo(elo_map[id_a], elo_map[id_b], 0.0)
-            _, new_elo_b = calculate_elo(elo_map[id_a], elo_map[id_b], 1.0) # 1.0 here because calculate_elo returns new_b for (1 - score_a)
+            # Double loss: Penalize both songs (as if each lost to the other)
+            # new_elo_a comes from A losing to B
+            # new_elo_b comes from B losing to A (which implies A winning against B)
+            new_elo_a = calculate_elo(elo_a, elo_b, 0.0)[0]
+            new_elo_b = calculate_elo(elo_a, elo_b, 1.0)[1]
         else:
             score_a = 0.5 if comparison.is_tie else (1.0 if str(comparison.winner_id) == id_a else 0.0)
-            new_elo_a, new_elo_b = calculate_elo(elo_map[id_a], elo_map[id_b], score_a)
+            new_elo_a, new_elo_b = calculate_elo(elo_a, elo_b, score_a)
 
         # 3. Persist comparison and updated Elos in one atomic operation
         await supabase_client.record_comparison_and_update_elo(
@@ -94,7 +96,8 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
             str(comparison.winner_id) if comparison.winner_id else None,
             comparison.is_tie,
             new_elo_a,
-            new_elo_b
+            new_elo_b,
+            decision_time_ms=comparison.decision_time_ms
         )
 
         # 4. Trigger Ranking Update (every 5 duels)

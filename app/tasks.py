@@ -47,9 +47,17 @@ async def process_ranking_update(session_id: str):
     )
     prev_top_ids = [str(s["song_id"]) for s in prev_ranking]
 
-    # 3. Compute Bradley-Terry
+    # 3. Compute Bradley-Terry with Warm Start
+    initial_p = {
+        str(s["song_id"]): float(s.get("bt_strength") or 1.0) 
+        for s in songs
+    }
     song_ids = [str(s["song_id"]) for s in songs]
-    bt_scores = RankingManager.compute_bradley_terry(song_ids, comparisons)
+    bt_scores = RankingManager.compute_bradley_terry(
+        song_ids, 
+        comparisons, 
+        initial_p=initial_p
+    )
     
     # 4. Prepare Updates
     updates = []

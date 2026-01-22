@@ -204,7 +204,8 @@ class SupabaseDB:
         winner_id: Optional[str], 
         is_tie: bool,
         new_elo_a: float,
-        new_elo_b: float
+        new_elo_b: float,
+        decision_time_ms: Optional[int] = None
     ):
         """
         Record a comparison and update Elos in a single transaction-like block.
@@ -214,7 +215,7 @@ class SupabaseDB:
         
         # We use RPC for atomicity and efficiency
         # This requires a 'record_duel' function to be defined in Supabase/Postgres
-        await client.rpc("record_duel", {
+        payload = {
             "p_session_id": session_id,
             "p_song_a_id": song_a_id,
             "p_song_b_id": song_b_id,
@@ -222,14 +223,19 @@ class SupabaseDB:
             "p_is_tie": is_tie,
             "p_new_elo_a": new_elo_a,
             "p_new_elo_b": new_elo_b
-        }).execute()
+        }
+        
+        if decision_time_ms is not None:
+            payload["p_decision_time_ms"] = decision_time_ms
+
+        await client.rpc("record_duel", payload).execute()
 
 
     async def get_session_comparisons(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all raw duel results for a session."""
         client = await self.get_client()
         response = await client.table("comparisons") \
-            .select("song_a_id, song_b_id, winner_id, is_tie") \
+            .select("song_a_id, song_b_id, winner_id, is_tie, decision_time_ms") \
             .eq("session_id", session_id) \
             .execute()
         return cast(List[Dict[str, Any]], response.data or [])

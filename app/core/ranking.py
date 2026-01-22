@@ -1,12 +1,14 @@
 import math
 import logging
 from typing import List, Dict, Tuple, Optional
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 class RankingManager:
     """
     Implements the Bradley-Terry model with MM algorithm and Elo re-calibration.
+    Optimized with NumPy and Warm Start.
     """
     
     @staticmethod
@@ -20,102 +22,145 @@ class RankingManager:
         return 400.0 * math.log10(gamma) + 1500.0
 
     @staticmethod
+    def get_comparison_weight(decision_time_ms: Optional[int]) -> float:
+        """
+        Calculate weight based on decision speed.
+        < 3s  -> 1.5 (High confidence)
+        > 10s -> 0.5 (Low confidence)
+        Else  -> 1.0
+        """
+        if decision_time_ms is None:
+            return 1.0
+        if decision_time_ms < 3000:
+            return 1.5
+        if decision_time_ms > 10000:
+            return 0.5
+        return 1.0
+
+    @staticmethod
     def compute_bradley_terry(
         song_ids: List[str],
         comparisons: List[Dict],
         iterations: int = 100,
-        tolerance: float = 1e-6
+        tolerance: float = 1e-4,
+        initial_p: Optional[Dict[str, float]] = None
     ) -> Dict[str, float]:
         """
-        Iterative MM algorithm to solve for song strengths (p).
-        
-        Args:
-            song_ids: List of unique song IDs involved.
-            comparisons: List of comparison dicts {winner_id, loser_id} or {song_a_id, song_b_id, winner_id}.
-            iterations: Max number of iterations.
-            tolerance: Convergence threshold.
-            
-        Returns:
-            Dict mapping song_id -> bt_strength (gamma).
+        Iterative MM algorithm to solve for song strengths (p) using NumPy.
+        Supports warm start via initial_p.
+        Weighted by decision time.
         """
         n = len(song_ids)
         if n == 0:
             return {}
         
-        # Initialize strengths (p) uniformly
-        p = {sid: 1.0 for sid in song_ids}
+        # Map song IDs to indices 0..n-1
+        id_to_idx = {sid: i for i, sid in enumerate(song_ids)}
         
-        # Build Win Matrix (W) and Comparison Matrix (N)
-        # N[i][j] = number of times i played j
-        # W[i] = number of times i beat anyone
+        # Initialize strengths (p)
+        # Default to 1.0, or use warm start values
+        p = np.ones(n, dtype=np.float64)
+        if initial_p:
+            for sid, val in initial_p.items():
+                if sid in id_to_idx:
+                    p[id_to_idx[sid]] = max(float(val), 1e-6)
+
+        # Build Win Vector (W) and Pair Data
+        W = np.zeros(n, dtype=np.float64)
         
-        # We use a dictionary for sparse matrix representation
-        # N[(id_i, id_j)] = count
-        N: Dict[Tuple[str, str], int] = {}
-        W: Dict[str, float] = {sid: 0.0 for sid in song_ids}
+        # Use a dict to aggregate pair counts: (idx_min, idx_max) -> count
+        pair_counts = {}
         
-        # Process comparisons
         for comp in comparisons:
             s_a = str(comp.get("song_a_id", ""))
             s_b = str(comp.get("song_b_id", ""))
-            winner = str(comp.get("winner_id", "")) if comp.get("winner_id") else None
-            is_tie = bool(comp.get("is_tie", False))
             
-            if not s_a or not s_b or s_a not in p or s_b not in p:
+            if s_a not in id_to_idx or s_b not in id_to_idx:
                 continue
+                
+            idx_a, idx_b = id_to_idx[s_a], id_to_idx[s_b]
             
-            # Use sorted tuple as key for undirected pair
-            ids = sorted([s_a, s_b])
-            pair = (ids[0], ids[1])
-            N[pair] = N.get(pair, 0) + 1
-            
+            winner_id = str(comp.get("winner_id") or "")
+            is_tie = comp.get("is_tie", False)
+            weight = RankingManager.get_comparison_weight(comp.get("decision_time_ms"))
+
+            # Update W (Win counts)
             if is_tie:
-                W[s_a] += 0.5
-                W[s_b] += 0.5
-            elif winner == s_a:
-                W[s_a] += 1.0
-            elif winner == s_b:
-                W[s_b] += 1.0
-        
-        # Laplace smoothing: Add 0.5 virtual wins to every song
-        for sid in song_ids:
-            W[sid] += 0.5
+                W[idx_a] += 0.5 * weight
+                W[idx_b] += 0.5 * weight
+            elif winner_id == s_a:
+                W[idx_a] += 1.0 * weight
+            elif winner_id == s_b:
+                W[idx_b] += 1.0 * weight
+                
+            # Update Pair counts (N_ij) with weight
+            pair_key = tuple(sorted((idx_a, idx_b)))
+            pair_counts[pair_key] = pair_counts.get(pair_key, 0.0) + weight
             
-        # MM Iteration
+        # Laplace smoothing: Add 0.5 virtual wins to every song
+        # Note: Smoothing remains unweighted (base prior)
+        W += 0.5
+        
+        if not pair_counts:
+            # Return current p if no comparisons
+            return {sid: float(p[i]) for sid, i in id_to_idx.items()}
+
+        # Prepare arrays for vectorized MM
+        pairs = np.array(list(pair_counts.keys()), dtype=np.int32)
+        counts = np.array(list(pair_counts.values()), dtype=np.float64)
+        
+        idx_i = pairs[:, 0]
+        idx_j = pairs[:, 1]
+        
         actual_iterations = 0
+        
+        # MM Iteration
         for _ in range(iterations):
             actual_iterations += 1
-            sums = {sid: 0.0 for sid in song_ids}
-
-            for (id1, id2), count in N.items():
-                denom = p[id1] + p[id2]
-                if denom > 0:
-                    val = count / denom
-                    sums[id1] += val
-                    sums[id2] += val
-
-            max_diff = 0.0
-            new_p = {}
-            for sid in song_ids:
-                # Update rule: p_i = W_i / sum(N_ij / (p_i + p_j))
-                new_p[sid] = W[sid] / sums[sid] if sums[sid] > 0 else p[sid]
-                max_diff = max(max_diff, abs(new_p[sid] - p[sid]))
-
-            p = new_p
-
-            # Normalize to keep values stable (geometric mean = 1)
-            log_sum = sum(math.log(max(1e-10, x)) for x in p.values())
-            gm = math.exp(log_sum / n)
-            p = {k: v / gm for k, v in p.items()}
-
+            
+            # 1. Compute pairwise sums: p_i + p_j
+            # Since idx_i and idx_j are indices into p
+            sums = p[idx_i] + p[idx_j]
+            
+            # 2. Compute ratios: N_ij / (p_i + p_j)
+            # Avoid division by zero
+            valid_sums = np.maximum(sums, 1e-12)
+            ratios = counts / valid_sums
+            
+            # 3. Accumulate denominator sums
+            # denom_sums[k] = sum_{j!=k} N_kj / (p_k + p_j)
+            denom = np.zeros(n, dtype=np.float64)
+            np.add.at(denom, idx_i, ratios)
+            np.add.at(denom, idx_j, ratios)
+            
+            # 4. Update p
+            # p_new[k] = W[k] / denom[k]
+            # Handle isolated songs: if denom is 0, keep previous p (don't explode)
+            mask = denom > 1e-12
+            p_new = p.copy()
+            p_new[mask] = W[mask] / denom[mask]
+            
+            # Check convergence
+            max_diff = np.max(np.abs(p_new - p))
+            p = p_new
+            
+            # Geometric Mean Normalization
+            # log_sum = sum(log(p))
+            # gm = exp(log_sum / n)
+            # p = p / gm
+            
+            # Use safe log
+            log_vals = np.log(np.maximum(p, 1e-12))
+            log_mean = np.mean(log_vals)
+            gm = np.exp(log_mean)
+            p = p / gm
+            
             if max_diff < tolerance:
                 break
-
-        # Log actual iterations for monitoring
-        import logging
-        logging.info(f"Bradley-Terry converged in {actual_iterations} iterations (max: {iterations}, tolerance: {tolerance})")
-
-        return p
+                
+        logger.info(f"Bradley-Terry converged in {actual_iterations} iterations (max: {iterations}, tolerance: {tolerance})")
+        
+        return {sid: float(p[i]) for sid, i in id_to_idx.items()}
 
     @staticmethod
     def calculate_progress(total_duels: int, total_songs: int) -> float:
@@ -157,7 +202,9 @@ class RankingManager:
         # We give more weight to higher positions (1st place is more important than 10th)
         position_score = 0.0
         total_weight = 0.0
-        for i in range(min(len(p_top), len(c_top))):
+        
+        limit = min(len(p_top), len(c_top))
+        for i in range(limit):
             weight = (top_n - i) / top_n
             total_weight += weight
             if p_top[i] == c_top[i]:

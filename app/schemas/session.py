@@ -47,6 +47,7 @@ class ComparisonCreate(BaseModel):
     song_b_id: UUID4
     winner_id: Optional[UUID4] = None
     is_tie: bool = False
+    decision_time_ms: Optional[int] = None
 
 class ComparisonResponse(BaseModel):
     success: bool
