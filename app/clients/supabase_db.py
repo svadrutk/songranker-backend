@@ -1,3 +1,4 @@
+import asyncio
 from typing import Dict, Any, Optional, cast, List
 import logging
 from supabase import create_async_client, AsyncClient
@@ -14,21 +15,25 @@ class SupabaseDB:
 
     async def get_client(self) -> AsyncClient:
         if self._client is None:
-            url = settings.effective_supabase_url
-            key = settings.effective_supabase_key
-            if not url or not key:
+            if not self.url or not self.key:
                 raise ValueError("Supabase URL and Key must be set in environment")
-            self._client = await create_async_client(url, key)
+            self._client = await create_async_client(self.url, self.key)
         return self._client
+
 
     async def get_ranking(self, user_id: str, release_id: str) -> Optional[Dict[str, Any]]:
         client = await self.get_client()
         try:
-            response = await client.table("rankings").select("*").eq("user_id", user_id).eq("release_id", release_id).execute()
+            response = await client.table("rankings") \
+                .select("*") \
+                .eq("user_id", user_id) \
+                .eq("release_id", release_id) \
+                .execute()
             return cast(Dict[str, Any], response.data[0]) if response.data else None
         except Exception as e:
             logger.warning(f"Failed to get ranking for {user_id}/{release_id}: {e}")
             return None
+
 
     async def bulk_upsert_songs(self, songs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -50,51 +55,52 @@ class SupabaseDB:
     async def create_session(self, user_id: Optional[str] = None) -> str:
         """Create a new session and return its ID."""
         client = await self.get_client()
-        payload: Dict[str, Any] = {"status": "active"}
+        payload = {"status": "active"}
         if user_id:
             payload["user_id"] = user_id
         
         response = await client.table("sessions").insert(payload).execute()
         if not response.data or not isinstance(response.data, list):
-            raise ValueError("Failed to create session")
+            raise ValueError("Failed to create session: No data returned")
         
         first_row = response.data[0]
         if not isinstance(first_row, dict):
-            raise ValueError("Failed to create session - unexpected format")
+            raise ValueError("Failed to create session: Unexpected response format")
             
         return str(first_row.get("id"))
+
 
     async def get_user_sessions(self, user_id: str) -> List[Dict[str, Any]]:
         """
         Get summarized sessions for a user using a optimized join.
         This fetches sessions, counts, and primary artist in one query.
-        Note: Requires a session_summaries view or complex select.
         """
         client = await self.get_client()
         
-        # We use a custom RPC or complex select to fetch everything in one go
-        # For now, we'll use a single select with embedded resources if possible,
-        # but Supabase join limits usually make a View or RPC better for complex counts.
-        # Here we'll call a dedicated RPC 'get_user_session_summaries'
         response = await client.rpc("get_user_session_summaries", {
             "p_user_id": user_id
         }).execute()
+        
         data = cast(List[Dict[str, Any]], response.data or [])
         if not isinstance(data, list):
             return []
 
         # Map the 'out_' prefixed columns back to expected names
-        return [
+        results = [
             {
                 "session_id": s["out_session_id"],
                 "created_at": s["out_created_at"],
                 "primary_artist": s["out_primary_artist"],
                 "song_count": s["out_song_count"],
                 "comparison_count": s["out_comparison_count"],
+                "convergence_score": s.get("out_convergence_score", 0),
                 "top_album_covers": s["out_top_album_covers"] or []
             }
             for s in data
         ]
+        if results:
+            logger.info(f"[DB] Session {results[0]['session_id']} artist {results[0]['primary_artist']} convergence: {results[0]['convergence_score']}")
+        return results
 
 
     async def get_session_comparison_count(self, session_id: str) -> int:
@@ -131,11 +137,10 @@ class SupabaseDB:
                 return []
             
             results = []
-            for item in (res.data or []):
+            for item in res.data:
                 if not isinstance(item, dict):
                     continue
                 
-                # Handle nested join response which can be a dict or a list of dicts
                 songs_data = item.get("songs")
                 if not songs_data:
                     continue
@@ -145,17 +150,19 @@ class SupabaseDB:
                     continue
                 
                 # Merge session-specific stats with global song details
-                results.append({
+                song_info = {
                     "song_id": str(item.get("song_id", "")),
                     "local_elo": item.get("local_elo", 1500.0),
                     "bt_strength": item.get("bt_strength"),
-                    **{k: v for k, v in details.items() if k != "id"}
-                })
+                }
+                song_info.update({k: v for k, v in details.items() if k != "id"})
+                results.append(song_info)
 
             return results
         except Exception as e:
             logger.error(f"Database error in get_session_songs: {e}")
             return []
+
 
     async def get_session_details(self, session_id: str) -> Dict[str, Any]:
         """Get session metadata including convergence."""
@@ -276,7 +283,6 @@ class SupabaseDB:
 
     async def update_comparison_aliases(self, session_id: str, old_song_id: str, new_song_id: str):
         """Update any comparisons that used the duplicate song ID."""
-        import asyncio
         client = await self.get_client()
         
         # Parallelize the three update operations
@@ -288,5 +294,6 @@ class SupabaseDB:
             client.table("comparisons").update({"song_b_id": new_song_id})
                 .eq("session_id", session_id).eq("song_b_id", old_song_id).execute()
         )
+
 
 supabase_client = SupabaseDB()
