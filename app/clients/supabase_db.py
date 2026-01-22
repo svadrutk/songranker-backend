@@ -90,7 +90,8 @@ class SupabaseDB:
                 "created_at": s["out_created_at"],
                 "primary_artist": s["out_primary_artist"],
                 "song_count": s["out_song_count"],
-                "comparison_count": s["out_comparison_count"]
+                "comparison_count": s["out_comparison_count"],
+                "top_album_covers": s["out_top_album_covers"] or []
             }
             for s in data
         ]

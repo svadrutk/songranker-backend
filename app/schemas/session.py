@@ -23,6 +23,7 @@ class SessionSummary(BaseModel):
     primary_artist: str
     song_count: int
     comparison_count: int
+    top_album_covers: List[str] = Field(default_factory=list)
 
 class SessionSong(BaseModel):
     song_id: UUID4
