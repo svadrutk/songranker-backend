@@ -57,3 +57,56 @@ app.include_router(image_generation.router, tags=["image-generation"])
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.get("/health/redis")
+async def redis_health_check():
+    """Check Redis connection for worker queue."""
+    try:
+        from app.core.queue import sync_redis_conn
+        # Test Redis connection
+        sync_redis_conn.ping()
+        return {
+            "status": "healthy",
+            "redis_url": settings.REDIS_URL,
+            "message": "Redis connection successful"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "redis_url": settings.REDIS_URL,
+            "error": str(e),
+            "message": "Redis connection failed"
+        }
+
+@app.get("/health/worker")
+async def worker_health_check():
+    """Check worker status and queue."""
+    try:
+        from app.core.queue import task_queue, sync_redis_conn
+        from rq import Worker
+        
+        # Get worker info
+        workers = Worker.all(connection=sync_redis_conn)
+        worker_info = []
+        for worker in workers:
+            worker_info.append({
+                "name": worker.name,
+                "state": worker.state,
+                "queues": [q.name for q in worker.queues]
+            })
+        
+        # Get queue info
+        queue_length = len(task_queue)
+        
+        return {
+            "status": "healthy",
+            "workers": worker_info,
+            "queue_length": queue_length,
+            "redis_url": settings.REDIS_URL
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "redis_url": settings.REDIS_URL
+        }
