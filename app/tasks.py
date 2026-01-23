@@ -26,14 +26,19 @@ def run_deep_deduplication(session_id: str):
 
 async def process_ranking_update(session_id: str):
     """Async logic for ranking update."""
-    logger.info(f"Starting ranking update for session {session_id}")
+    import time
+    start_time = time.time()
+    logger.info(f"[TIMING] Starting ranking update for session {session_id}")
     
     # 1. Fetch Data
+    fetch_start = time.time()
     songs, comparisons, total_duels = await asyncio.gather(
         supabase_client.get_session_songs(session_id),
         supabase_client.get_session_comparisons(session_id),
         supabase_client.get_session_comparison_count(session_id)
     )
+    fetch_time = (time.time() - fetch_start) * 1000
+    logger.info(f"[TIMING] Data fetch took {fetch_time:.2f}ms")
     
     if not songs:
         logger.warning(f"No songs found for session {session_id}")
@@ -48,6 +53,7 @@ async def process_ranking_update(session_id: str):
     prev_top_ids = [str(s["song_id"]) for s in prev_ranking]
 
     # 3. Compute Bradley-Terry with Warm Start
+    bt_start = time.time()
     initial_p = {
         str(s["song_id"]): float(s.get("bt_strength") or 1.0) 
         for s in songs
@@ -58,6 +64,8 @@ async def process_ranking_update(session_id: str):
         comparisons, 
         initial_p=initial_p
     )
+    bt_time = (time.time() - bt_start) * 1000
+    logger.info(f"[TIMING] Bradley-Terry computation took {bt_time:.2f}ms")
     
     # 4. Prepare Updates
     updates = []
@@ -83,8 +91,13 @@ async def process_ranking_update(session_id: str):
     logger.info(f"Session {session_id}: Quantity={quantity_score:.2f}, Stability={stability_score:.2f}, Final={convergence_score}")
     
     # 6. Persist Results
+    persist_start = time.time()
     await supabase_client.update_session_ranking(session_id, updates, convergence_score)
-    logger.info(f"Completed ranking update for session {session_id}")
+    persist_time = (time.time() - persist_start) * 1000
+    logger.info(f"[TIMING] Database persist took {persist_time:.2f}ms")
+    
+    total_time = (time.time() - start_time) * 1000
+    logger.info(f"[TIMING] ✅ Completed ranking update for session {session_id} in {total_time:.2f}ms")
 
 def run_ranking_update(session_id: str):
     """Synchronous wrapper for ranking update task."""

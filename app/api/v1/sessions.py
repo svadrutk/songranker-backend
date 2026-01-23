@@ -104,8 +104,11 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
         count = await supabase_client.get_session_comparison_count(str(session_id))
         sync_queued = False
         if count > 0 and count % 5 == 0:
+            import time
+            queue_time = time.time()
             task_queue.enqueue(run_ranking_update, str(session_id))
             sync_queued = True
+            logger.info(f"[TIMING] Queued ranking update for session {session_id} at count={count} (timestamp: {queue_time})")
 
         # 5. Fetch current convergence to return in response
         details = await supabase_client.get_session_details(str(session_id))
