@@ -64,7 +64,7 @@ async def delete_session(session_id: UUID):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/sessions/{session_id}/comparisons", response_model=ComparisonResponse)
-async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
+async def create_comparison(session_id: UUID, comparison: ComparisonCreate, background_tasks: BackgroundTasks):
     """
     Record a duel result and update local Elo ratings.
     """
@@ -106,7 +106,9 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate):
         if count > 0 and count % 5 == 0:
             import time
             queue_time = time.time()
-            task_queue.enqueue(run_ranking_update, str(session_id))
+            # Run ranking update in-process using BackgroundTasks (avoids 1.3s event loop overhead)
+            from app.tasks import process_ranking_update
+            background_tasks.add_task(process_ranking_update, str(session_id))
             sync_queued = True
             logger.info(f"[TIMING] Queued ranking update for session {session_id} at count={count} (timestamp: {queue_time})")
 
