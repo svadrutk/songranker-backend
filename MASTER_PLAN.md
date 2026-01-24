@@ -90,3 +90,45 @@ Song Ranker is an interactive web application for ranking songs through pairwise
 1. **No Duplicates**: The user never sees the same song twice or "near-duplicates" in a single session.
 2. **Snappy UX**: Duels feel instant; mathematical heavy lifting happens in the background.
 3. **Statistical Integrity**: The final ranking reflects the Bradley-Terry model's probabilistic strengths.
+
+---
+
+## 🌍 Global Leaderboard (Phase 6)
+
+### Overview
+Aggregates rankings across all user sessions to show platform-wide song rankings by artist.
+
+### Architecture
+- **Update Strategy**: Batch + Interval (updates every 10 minutes per artist)
+- **Trigger**: Automatic after session updates (when user completes 5 duels)
+- **Algorithm**: Same Bradley-Terry model, but aggregating all comparisons across all sessions
+
+### Database Schema Updates
+```sql
+-- songs table additions
+ALTER TABLE songs ADD COLUMN global_elo FLOAT8 DEFAULT 1500.0;
+ALTER TABLE songs ADD COLUMN global_bt_strength FLOAT8 DEFAULT 1.0;
+ALTER TABLE songs ADD COLUMN global_votes_count INT4 DEFAULT 0;
+
+-- new artist_stats table
+CREATE TABLE artist_stats (
+  artist TEXT PRIMARY KEY,
+  last_global_update_at TIMESTAMPTZ DEFAULT NOW(),
+  total_comparisons_count BIGINT DEFAULT 0
+);
+```
+
+### API Endpoints
+1. **GET `/leaderboard/{artist}`** - Returns top 100 songs (configurable limit)
+2. **GET `/leaderboard/{artist}/stats`** - Lightweight stats endpoint
+
+### Performance
+- **Read**: < 50ms (with Redis caching, 2-min TTL)
+- **Write**: 100-500ms (async background task)
+- **Scalability**: Handles 1000+ concurrent users per artist
+
+### Implementation Files
+- `app/api/v1/leaderboard.py` - API endpoints
+- `app/tasks.py` - Global ranking background task
+- `app/clients/supabase_db.py` - Database methods
+- `supabase_global_leaderboard.sql` - Migration script

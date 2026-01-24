@@ -301,5 +301,120 @@ class SupabaseDB:
                 .eq("session_id", session_id).eq("song_b_id", old_song_id).execute()
         )
 
+    # ==================== Global Leaderboard Methods ====================
+
+    async def get_artist_songs(self, artist: str) -> List[Dict[str, Any]]:
+        """Get all songs for a specific artist with their global stats."""
+        client = await self.get_client()
+        response = await client.rpc("get_artist_songs", {
+            "p_artist": artist
+        }).execute()
+        return cast(List[Dict[str, Any]], response.data or [])
+
+    async def get_artist_comparisons(self, artist: str) -> List[Dict[str, Any]]:
+        """Get all comparisons for songs by a specific artist across all sessions."""
+        client = await self.get_client()
+        response = await client.rpc("get_artist_comparisons", {
+            "p_artist": artist
+        }).execute()
+        return cast(List[Dict[str, Any]], response.data or [])
+
+    async def update_global_rankings(self, updates: List[Dict[str, Any]]):
+        """
+        Bulk update global rankings for songs.
+        
+        updates: List of dicts with {song_id, global_elo, global_bt_strength, global_votes_count}
+        """
+        if not updates:
+            return
+            
+        client = await self.get_client()
+        
+        # Update each song individually (Supabase doesn't support bulk update easily)
+        # This is acceptable because global updates happen in background
+        for u in updates:
+            await client.table("songs").update({
+                "global_elo": u["global_elo"],
+                "global_bt_strength": u["global_bt_strength"],
+                "global_votes_count": u.get("global_votes_count", 0)
+            }).eq("id", str(u["song_id"])).execute()
+        
+        logger.info(f"Successfully updated global rankings for {len(updates)} songs")
+
+    async def get_artist_stats(self, artist: str) -> Optional[Dict[str, Any]]:
+        """Get statistics for an artist including last update timestamp."""
+        client = await self.get_client()
+        response = await client.table("artist_stats") \
+            .select("*") \
+            .eq("artist", artist) \
+            .maybe_single() \
+            .execute()
+        
+        if response and hasattr(response, "data") and response.data:
+            return cast(Dict[str, Any], response.data)
+        return None
+
+    async def upsert_artist_stats(self, artist: str, comparison_count: int):
+        """Update or insert artist statistics."""
+        client = await self.get_client()
+        await client.table("artist_stats").upsert({
+            "artist": artist,
+            "last_global_update_at": "now()",
+            "total_comparisons_count": comparison_count
+        }, on_conflict="artist").execute()
+        
+        logger.info(f"Updated artist stats for {artist}: {comparison_count} comparisons")
+
+    async def get_leaderboard(self, artist: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get the global leaderboard for an artist."""
+        client = await self.get_client()
+        response = await client.table("songs") \
+            .select("id, name, artist, album, cover_url, global_elo, global_bt_strength, global_votes_count") \
+            .eq("artist", artist) \
+            .order("global_elo", desc=True) \
+            .limit(limit) \
+            .execute()
+        
+        return cast(List[Dict[str, Any]], response.data or [])
+
+    async def get_session_primary_artist(self, session_id: str) -> Optional[str]:
+        """Get the primary artist for a session by finding the most common artist."""
+        client = await self.get_client()
+        try:
+            # Get all songs in the session with their artists
+            response = await client.table("session_songs") \
+                .select("songs(artist)") \
+                .eq("session_id", session_id) \
+                .execute()
+            
+            if not response.data:
+                return None
+            
+            # Count artist occurrences
+            artist_counts: Dict[str, int] = {}
+            for item in response.data:
+                if not isinstance(item, dict):
+                    continue
+                    
+                songs_data = item.get("songs")
+                if not songs_data:
+                    continue
+                
+                song_detail = songs_data[0] if isinstance(songs_data, list) else songs_data
+                if isinstance(song_detail, dict):
+                    artist = song_detail.get("artist")
+                    if artist and isinstance(artist, str):
+                        artist_counts[artist] = artist_counts.get(artist, 0) + 1
+            
+            if not artist_counts:
+                return None
+            
+            # Return the most common artist
+            return max(artist_counts.items(), key=lambda x: x[1])[0]
+            
+        except Exception as e:
+            logger.error(f"Error fetching primary artist for session {session_id}: {e}")
+            return None
+
 
 supabase_client = SupabaseDB()
