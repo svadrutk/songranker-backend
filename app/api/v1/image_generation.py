@@ -1,5 +1,6 @@
 import logging
 import os
+import base64
 from typing import List, Optional, Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -16,6 +17,14 @@ logger = logging.getLogger(__name__)
 TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static")
 FONTS_DIR = os.path.join(STATIC_DIR, "fonts")
+
+# Load and encode fonts as base64
+def load_font_base64(font_path: str) -> str:
+    with open(font_path, 'rb') as f:
+        return base64.b64encode(f.read()).decode('utf-8')
+
+GEIST_FONT_BASE64 = load_font_base64(os.path.join(FONTS_DIR, "Geist/variable/Geist[wght].ttf"))
+GEIST_MONO_FONT_BASE64 = load_font_base64(os.path.join(FONTS_DIR, "GeistMono-Bold.woff2"))
 
 env = Environment(loader=FileSystemLoader(TEMPLATES_DIR))
 
@@ -65,7 +74,8 @@ async def generate_receipt(request: ReceiptRequest):
             "date_str": str(request.dateStr),
             "time_str": str(request.timeStr),
             "barcode_pattern": barcode_pattern,
-            "font_path": FONTS_DIR
+            "geist_font_base64": GEIST_FONT_BASE64,
+            "geist_mono_font_base64": GEIST_MONO_FONT_BASE64
         }
         
         logger.info(f"Rendering template with context keys: {list(context.keys())}")
@@ -82,6 +92,17 @@ async def generate_receipt(request: ReceiptRequest):
             
             # Wait for fonts to load (using document.fonts.ready)
             await page.evaluate("document.fonts.ready")
+            
+            # Debug: Check what fonts are loaded
+            loaded_fonts = await page.evaluate("""
+                Array.from(document.fonts).map(f => ({
+                    family: f.family,
+                    weight: f.weight,
+                    style: f.style,
+                    status: f.status
+                }))
+            """)
+            logger.info(f"Loaded fonts: {loaded_fonts}")
             
             # Get the actual height of the content to ensure we capture everything
             # Although the design is fixed width/min-height, let's just grab the element

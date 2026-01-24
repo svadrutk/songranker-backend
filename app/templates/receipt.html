@@ -7,12 +7,13 @@
     <style>
         @font-face {
             font-family: 'Geist';
-            src: url('file://{{ font_path }}/Geist-Black.woff2') format('woff2');
+            src: url('data:font/truetype;base64,{{ geist_font_base64 }}') format('truetype-variations');
+            font-weight: 100 900;
             font-style: normal;
         }
         @font-face {
             font-family: 'Geist Mono';
-            src: url('file://{{ font_path }}/GeistMono-Bold.woff2') format('woff2');
+            src: url('data:font/woff2;base64,{{ geist_mono_font_base64 }}') format('woff2');
             font-weight: 700;
             font-style: normal;
         }
@@ -74,6 +75,7 @@
         .title {
             font-family: 'Geist', sans-serif;
             font-size: 60px; /* text-6xl */
+            font-weight: 900;
             letter-spacing: -0.05em; /* tracking-tighter */
             text-transform: uppercase;
             margin-bottom: 16px; /* mb-4 */
@@ -100,11 +102,12 @@
             display: flex;
             justify-content: space-between;
             font-size: 30px; /* text-3xl */
-            text-transform: uppercase;
+            font-weight: 700;
+            text-transform: lowercase;
             border-bottom: 2px solid rgba(255, 255, 255, 0.05);
             padding-bottom: 24px; /* pb-6 */
             margin-bottom: 40px; /* space-y-10 -> 2.5rem */
-            font-family: 'Geist', sans-serif;
+            font-family: 'Geist Mono', monospace;
         }
 
         .song-list {
@@ -161,6 +164,7 @@
 
         .rank-number {
             font-size: 36px; /* text-4xl */
+            font-weight: 900;
             opacity: 0.2;
             width: 48px; /* w-12 */
             flex-shrink: 0;
@@ -175,6 +179,7 @@
 
         .song-name {
             font-size: 36px; /* text-4xl */
+            font-weight: 900;
             text-transform: uppercase;
             letter-spacing: -0.025em; /* tracking-tight */
             line-height: 1;
@@ -198,6 +203,7 @@
 
         .quantity {
             font-size: 30px; /* text-3xl */
+            font-weight: 900;
             opacity: 0.2;
             flex-shrink: 0;
             font-family: 'Geist', sans-serif;
@@ -262,8 +268,8 @@
         <!-- List Section -->
         <div class="list-section">
             <div class="list-header">
-                <span>TRACK / ARTIST</span>
-                <span>QTY</span>
+                <span>track / artist</span>
+                <span>qty</span>
             </div>
 
             <div class="song-list">
