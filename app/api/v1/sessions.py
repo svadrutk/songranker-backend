@@ -57,7 +57,18 @@ async def get_session_songs(session_id: UUID):
 async def delete_session(session_id: UUID):
     """Delete a session and all its associated data."""
     try:
+        # 1. Get primary artist before deletion so we can refresh their global stats
+        artist = await supabase_client.get_session_primary_artist(str(session_id))
+
+        # 2. Delete the session (cascades to songs and comparisons)
         await supabase_client.delete_session(str(session_id))
+
+        # 3. Trigger immediate global ranking update to remove these votes from the leaderboard
+        if artist:
+            from app.tasks import run_global_ranking_update
+            task_queue.enqueue(run_global_ranking_update, artist)
+            logger.info(f"Triggered global ranking update for {artist} after session deletion")
+
         return {"status": "success", "message": "Session deleted"}
     except Exception as e:
         logger.error(f"Failed to delete session {session_id}: {e}")

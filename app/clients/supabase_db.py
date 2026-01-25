@@ -347,11 +347,11 @@ class SupabaseDB:
         response = await client.table("artist_stats") \
             .select("*") \
             .eq("artist", artist) \
-            .maybe_single() \
+            .limit(1) \
             .execute()
         
-        if response and hasattr(response, "data") and response.data:
-            return cast(Dict[str, Any], response.data)
+        if response and hasattr(response, "data") and response.data and len(response.data) > 0:
+            return cast(Dict[str, Any], response.data[0])
         return None
 
     async def upsert_artist_stats(self, artist: str, comparison_count: int):
