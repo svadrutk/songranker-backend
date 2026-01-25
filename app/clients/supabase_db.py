@@ -354,6 +354,19 @@ class SupabaseDB:
             return cast(Dict[str, Any], response.data[0])
         return None
 
+    async def get_artist_total_comparisons(self, artist: str) -> int:
+        """
+        Get the total number of comparisons for an artist across all sessions.
+        This includes both processed (in global rankings) and pending comparisons.
+        """
+        client = await self.get_client()
+        response = await client.rpc("get_artist_comparisons", {
+            "p_artist": artist
+        }).execute()
+        
+        comparisons = cast(List[Dict[str, Any]], response.data or [])
+        return len(comparisons)
+
     async def upsert_artist_stats(self, artist: str, comparison_count: int):
         """Update or insert artist statistics."""
         client = await self.get_client()

@@ -30,14 +30,16 @@ class LeaderboardResponse(BaseModel):
     artist: str
     songs: List[LeaderboardSong]
     total_comparisons: int
+    pending_comparisons: int
     last_updated: Optional[str] = None
 
 
 async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[dict]:
     """Fetch leaderboard and artist stats, then build response as a dict for caching."""
-    songs_data, stats = await asyncio.gather(
+    songs_data, stats, total_comparisons = await asyncio.gather(
         supabase_client.get_leaderboard(artist, limit),
-        supabase_client.get_artist_stats(artist)
+        supabase_client.get_artist_stats(artist),
+        supabase_client.get_artist_total_comparisons(artist)
     )
     
     if not songs_data:
@@ -58,10 +60,15 @@ async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[dict]:
         for idx, s in enumerate(songs_data)
     ]
     
+    # Calculate pending comparisons (total - processed)
+    processed_comparisons = stats.get("total_comparisons_count", 0) if stats else 0
+    pending_comparisons = max(0, total_comparisons - processed_comparisons)
+    
     return {
         "artist": artist,
         "songs": songs,
-        "total_comparisons": stats.get("total_comparisons_count", 0) if stats else 0,
+        "total_comparisons": processed_comparisons,
+        "pending_comparisons": pending_comparisons,
         "last_updated": stats.get("last_global_update_at") if stats else None
     }
 
@@ -108,7 +115,10 @@ async def get_artist_leaderboard_stats(request: Request, artist: str):
     Get statistics about an artist's global leaderboard.
     Returns metadata without the full song list (lighter weight than full leaderboard).
     """
-    stats = await supabase_client.get_artist_stats(artist)
+    stats, total_comparisons = await asyncio.gather(
+        supabase_client.get_artist_stats(artist),
+        supabase_client.get_artist_total_comparisons(artist)
+    )
     
     if not stats:
         raise HTTPException(
@@ -116,9 +126,14 @@ async def get_artist_leaderboard_stats(request: Request, artist: str):
             detail=f"No statistics found for artist: {artist}"
         )
     
+    # Calculate pending comparisons
+    processed_comparisons = stats.get("total_comparisons_count", 0)
+    pending_comparisons = max(0, total_comparisons - processed_comparisons)
+    
     return {
         "artist": artist,
-        "total_comparisons": stats.get("total_comparisons_count", 0),
+        "total_comparisons": processed_comparisons,
+        "pending_comparisons": pending_comparisons,
         "last_updated": stats.get("last_global_update_at"),
         "created_at": stats.get("created_at")
     }
