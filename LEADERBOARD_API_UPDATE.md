@@ -201,14 +201,26 @@ pending_comparisons = total_comparisons - processed_comparisons
 
 ### Global Update Trigger
 
-Global rankings update when:
-1. A session ranking completes (every 5 duels)
-2. AND it's been 10+ minutes since the last global update for that artist
+Global rankings update in two ways:
 
-So if you do 55 duels in 5 minutes:
+**1. During Active Ranking (Primary)**
+- A session ranking completes (every 5 duels)
+- AND it's been 10+ minutes since the last global update for that artist
+- The next comparison triggers the update
+
+**2. On Leaderboard View (Fallback)**
+- Someone views the leaderboard
+- There are pending comparisons
+- AND it's been 10+ minutes since the last update
+- The view triggers a background update
+
+**Example Scenario:**
+If you do 55 duels in 5 minutes and then stop:
 - Session rankings update 11 times (5, 10, 15, ..., 55)
-- Global ranking updates once (at the 10-minute mark)
-- The "pending" counter shows 50 comparisons waiting
+- Global ranking doesn't update (no comparisons after the 10-minute mark)
+- The "pending" counter shows 50+ comparisons waiting
+- **When anyone views the leaderboard after 10 minutes**, the update triggers automatically
+- The pending comparisons get processed within ~30 seconds
 
 ### Caching
 
