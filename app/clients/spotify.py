@@ -1,9 +1,11 @@
 import httpx
 import base64
 import time
+import asyncio
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.utils import normalize_title, DELUXE_KEYWORDS, SKIP_KEYWORDS, get_type_priority
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
 
 class SpotifyClient:
     def __init__(self):
@@ -47,18 +49,74 @@ class SpotifyClient:
         
         return access_token
 
-    async def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None, client: Optional[httpx.AsyncClient] = None) -> Dict[str, Any]:
-        """Authenticated GET request."""
-        active_client = client or await self.get_client()
-        token = await self._get_access_token(active_client)
-        
+    @staticmethod
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(httpx.HTTPStatusError)
+    )
+    async def _get_request(
+        active_client: httpx.AsyncClient, 
+        token: str, 
+        base_url: str, 
+        endpoint: str, 
+        params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Actual HTTP GET request with retry logic."""
         response = await active_client.get(
-            f"{self.base_url}{endpoint}",
+            f"{base_url}{endpoint}",
             headers={"Authorization": f"Bearer {token}"},
             params=params
         )
         response.raise_for_status()
         return response.json()
+
+    async def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None, client: Optional[httpx.AsyncClient] = None) -> Dict[str, Any]:
+        """Authenticated GET request with retry logic for rate limiting and transient errors."""
+        active_client = client or await self.get_client()
+        token = await self._get_access_token(active_client)
+        
+        return await self._get_request(active_client, token, self.base_url, endpoint, params)
+
+    async def call_via_worker(self, method_name: str, timeout: float = 20.0, **kwargs) -> Any:
+        """
+        Proxy method that enqueues Spotify API calls to a dedicated worker.
+        This ensures all Spotify traffic is serialized, preventing rate limit issues.
+        
+        Args:
+            method_name: The SpotifyClient method to call (e.g., "search_artist_albums")
+            timeout: Maximum time to wait for the worker to complete (seconds)
+            **kwargs: Arguments to pass to the method
+            
+        Returns:
+            The result from the Spotify API call
+            
+        Raises:
+            TimeoutError: If the worker doesn't complete within the timeout
+            Exception: If the worker task fails
+        """
+        from app.core.queue import spotify_queue
+        from app.tasks import run_spotify_method
+        
+        # Enqueue the task to the dedicated Spotify worker
+        job = spotify_queue.enqueue(run_spotify_method, method_name, **kwargs)
+        
+        # Poll for completion
+        start_time = time.time()
+        while True:
+            status = job.get_status()
+            
+            if status == 'finished':
+                return job.result
+            elif status == 'failed':
+                raise Exception(f"Spotify worker task failed: {job.exc_info}")
+            
+            # Check timeout
+            if time.time() - start_time > timeout:
+                raise TimeoutError(f"Spotify worker timed out after {timeout}s")
+            
+            # Wait a bit before checking again
+            await asyncio.sleep(0.1)
 
     async def search_artist_albums(self, artist_name: str, client: Optional[httpx.AsyncClient] = None) -> List[Dict[str, Any]]:
         """

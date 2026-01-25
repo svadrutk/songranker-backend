@@ -171,11 +171,12 @@ async def search(request: Request, background_tasks: BackgroundTasks, query: str
     # 2. FAST PATH: Spotify
     # If credentials are present, use Spotify as the primary search engine.
     # It is faster (200ms vs 1s+) and handles typos natively.
+    # Route through dedicated worker for rate limiting.
     if settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET:
         cache_key = f"spotify_search:{norm_query}"
         results = await cache.get_or_fetch(
             cache_key,
-            lambda: spotify_client.search_artist_albums(query, client),
+            lambda: spotify_client.call_via_worker("search_artist_albums", artist_name=query),
             ttl_seconds=3600,
             background_tasks=background_tasks
         )
@@ -271,7 +272,7 @@ async def get_tracks(
              logger.info(f"Spotify ID detected: {release_group_id}")
              if artist and title:
                  background_tasks.add_task(_resolve_mbid_background, artist, title, release_group_id, client)
-             return await spotify_client.get_album_tracks(release_group_id, client=client)
+             return await spotify_client.call_via_worker("get_album_tracks", spotify_id=release_group_id)
 
         # 2. Parallel Strategy
         valid_results = await _fetch_tracks_parallel(release_group_id, artist, title, client)

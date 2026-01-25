@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     
+    # Rate Limiting
+    SPOTIFY_PAUSE_KEY: str = "spotify:global_pause"
+    
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
     
     @property

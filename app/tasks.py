@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict
+from typing import Dict, Any
 from datetime import datetime, timedelta, timezone
 from app.core.deduplication import deep_deduplicate_session
 from app.core.ranking import RankingManager
@@ -245,3 +245,23 @@ def run_global_ranking_update(artist: str):
     finally:
         # Remove lock when task completes (success or failure)
         _global_update_locks.discard(artist)
+
+def run_spotify_method(method_name: str, **kwargs) -> Any:
+    """
+    Worker task to execute Spotify client methods.
+    This ensures all Spotify API calls are serialized through a single worker,
+    providing natural rate limiting across all Gunicorn instances.
+    """
+    from app.clients.spotify import spotify_client
+    logger.info(f"[SPOTIFY WORKER] Executing method: {method_name} with args: {kwargs}")
+    
+    try:
+        method = getattr(spotify_client, method_name)
+        # Remove 'client' from kwargs if it exists because the worker uses its own client
+        kwargs.pop('client', None)
+        result = _run_async_task(method(**kwargs))
+        logger.info(f"[SPOTIFY WORKER] Successfully completed: {method_name}")
+        return result
+    except Exception as e:
+        logger.error(f"[SPOTIFY WORKER] Failed to execute {method_name}: {e}")
+        raise

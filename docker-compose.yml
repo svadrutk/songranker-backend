@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PORT=8000
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      gunicorn app.main:app 
+      --workers 4 
+      --worker-class uvicorn.workers.UvicornWorker 
+      --bind 0.0.0.0:8000 
+      --timeout 120 
+      --keep-alive 5
+      --access-logfile -
+      --error-logfile -
+      --log-level info
+
+  worker_default:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python worker.py --queues default
+    deploy:
+      replicas: 1  # Can scale this up if needed
+
+  worker_spotify:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python worker.py --queues spotify
+    deploy:
+      replicas: 1  # CRITICAL: Must stay at 1 for rate limiting!
+
+volumes:
+  redis_data:
