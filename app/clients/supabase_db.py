@@ -358,6 +358,11 @@ class SupabaseDB:
         """
         Get the total number of comparisons for an artist across all sessions.
         This includes both processed (in global rankings) and pending comparisons.
+        
+        Note: This currently fetches all comparison data just to count them.
+        For better performance with popular artists, consider creating a dedicated
+        database function 'get_artist_comparisons_count(p_artist)' that returns
+        just the count.
         """
         client = await self.get_client()
         response = await client.rpc("get_artist_comparisons", {
@@ -428,6 +433,27 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error fetching primary artist for session {session_id}: {e}")
             return None
+
+    async def create_feedback(self, message: str, user_id: Optional[str] = None, user_agent: Optional[str] = None, url: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new feedback/bug report entry."""
+        client = await self.get_client()
+        try:
+            payload = {"message": message}
+            if user_id:
+                payload["user_id"] = user_id
+            if user_agent:
+                payload["user_agent"] = user_agent
+            if url:
+                payload["url"] = url
+            
+            response = await client.table("feedback").insert(payload).execute()
+            if not response.data or not isinstance(response.data, list):
+                raise ValueError("Failed to create feedback: No data returned")
+            
+            return cast(Dict[str, Any], response.data[0])
+        except Exception as e:
+            logger.error(f"Failed to create feedback: {e}")
+            raise
 
 
 supabase_client = SupabaseDB()

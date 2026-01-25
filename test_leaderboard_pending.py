@@ -1,64 +1,94 @@
 #!/usr/bin/env python
 """
-Test script to verify the leaderboard API returns pending comparisons.
+Manual test script to verify the leaderboard API returns pending comparisons.
+Run with: uv run python test_leaderboard_pending.py [artist_name]
 """
 import asyncio
-from app.clients.supabase_db import supabase_client
+import sys
+from typing import Dict, Any, Optional
+
 from app.api.v1.leaderboard import fetch_leaderboard_data
 
-async def test_pending_comparisons():
-    """Test that pending comparisons are calculated correctly."""
-    print("Testing Leaderboard Pending Comparisons...")
-    print("=" * 60)
+
+def print_section(title: str, width: int = 60) -> None:
+    """Print a section header."""
+    print("\n" + "=" * width)
+    print(title)
+    print("=" * width)
+
+
+def _print_result_summary(result: Dict[str, Any]) -> None:
+    """Print the test result summary."""
+    pending = result['pending_comparisons']
     
-    # Test with an artist (adjust to one in your database)
-    test_artist = "Ariana Grande"
+    print(f"\n✓ Leaderboard data retrieved:")
+    print(f"  - Processed comparisons: {result['total_comparisons']}")
+    print(f"  - Pending comparisons:   {pending}")
+    print(f"  - Last updated:          {result['last_updated']}")
+    print(f"  - Songs in leaderboard:  {len(result['songs'])}")
+    
+    if pending > 0:
+        print(f"\n⚠️  {pending} comparisons waiting to be processed!")
+        print("   The global ranking will update within 10 minutes.")
+    else:
+        print("\n✓ All comparisons have been processed!")
+
+
+def _print_api_structure_info() -> None:
+    """Print API response structure documentation."""
+    print_section("API Response Structure")
+    print("  - total_comparisons:   Number of comparisons in global ranking")
+    print("  - pending_comparisons: Comparisons waiting to be processed")
+    print("  - last_updated:        ISO timestamp of last global update")
+
+
+async def test_pending_comparisons(artist: str) -> bool:
+    """
+    Test that pending comparisons are calculated correctly.
+    
+    Args:
+        artist: The artist name to test
+    
+    Returns:
+        True if test passed, False otherwise
+    """
+    print_section(f"Testing Leaderboard for: {artist}")
     
     try:
-        # Fetch leaderboard data
-        result = await fetch_leaderboard_data(test_artist, limit=10)
+        result = await fetch_leaderboard_data(artist, limit=10)
         
-        if result:
-            print(f"\n✓ Leaderboard data for {test_artist}:")
-            print(f"  - Processed comparisons: {result['total_comparisons']}")
-            print(f"  - Pending comparisons: {result['pending_comparisons']}")
-            print(f"  - Last updated: {result['last_updated']}")
-            print(f"  - Songs in leaderboard: {len(result['songs'])}")
-            
-            if result['pending_comparisons'] > 0:
-                print(f"\n⚠️  There are {result['pending_comparisons']} comparisons waiting to be processed!")
-                print("   The global ranking will update within 10 minutes.")
-            else:
-                print("\n✓ All comparisons have been processed!")
-        else:
-            print(f"\n⚠️  No leaderboard data found for {test_artist}")
+        if not result:
+            print(f"\n⚠️  No leaderboard data found for '{artist}'")
             print("   This might be expected if no one has ranked this artist yet.")
+            return False
         
-        print("\n" + "=" * 60)
-        print("✓ Test completed successfully!")
-        print("\nAPI Response Structure:")
-        print("  - total_comparisons: Number of comparisons in global ranking")
-        print("  - pending_comparisons: Comparisons waiting to be processed")
-        print("  - last_updated: ISO timestamp of last global update")
+        _print_result_summary(result)
+        _print_api_structure_info()
+        
+        return True
         
     except Exception as e:
         print(f"\n✗ Test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
-    
-    return True
 
-if __name__ == "__main__":
-    print("Leaderboard Pending Comparisons Test")
-    print("=" * 60)
+
+def main() -> int:
+    """Main entry point."""
+    # Get artist from command line or use default
+    default_artist = "Ariana Grande"
+    artist = sys.argv[1] if len(sys.argv) > 1 else default_artist
+    
+    print_section("Leaderboard Pending Comparisons Test")
     print("\nThis test verifies that the leaderboard API correctly shows:")
     print("  1. Processed comparisons (in global ranking)")
     print("  2. Pending comparisons (waiting to be processed)")
     print("  3. Accurate last_updated timestamp")
-    print("\nStarting test...\n")
     
-    success = asyncio.run(test_pending_comparisons())
-    
-    import sys
-    sys.exit(0 if success else 1)
+    success = asyncio.run(test_pending_comparisons(artist))
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

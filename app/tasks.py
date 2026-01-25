@@ -1,22 +1,35 @@
 import asyncio
 import logging
 from typing import Dict, Any
-from datetime import datetime, timedelta, timezone
 from app.core.deduplication import deep_deduplicate_session
 from app.core.ranking import RankingManager
 from app.clients.supabase_db import supabase_client
 from app.core.queue import task_queue
+from app.core.global_ranking_config import (
+    GLOBAL_UPDATE_INTERVAL_MINUTES,
+    get_global_update_lock_key
+)
+from app.core.global_ranking_utils import (
+    should_trigger_global_update,
+    get_seconds_since_update
+)
 
 logger = logging.getLogger(__name__)
 
-# Global ranking update interval (in minutes)
-GLOBAL_UPDATE_INTERVAL_MINUTES = 10
-
-# In-memory set to track artists currently being updated (prevents race conditions)
+# In-memory set to track artists currently being updated
+# This provides per-worker-process deduplication, while Redis locks provide cross-worker coordination
 _global_update_locks: set = set()
 
-def _run_async_task(coro):
-    """Helper to run async tasks in a synchronous worker environment."""
+def _run_async_task(coro) -> Any:
+    """
+    Helper to run async tasks in a synchronous worker environment.
+    
+    Args:
+        coro: The coroutine to run
+    
+    Returns:
+        The result of the coroutine
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -24,68 +37,61 @@ def _run_async_task(coro):
     finally:
         loop.close()
 
-async def _maybe_trigger_global_update(session_id: str):
+async def _maybe_trigger_global_update(session_id: str) -> None:
     """
     Check if the session's primary artist needs a global ranking update.
     Triggers update if last update was more than GLOBAL_UPDATE_INTERVAL_MINUTES ago.
+    
+    Args:
+        session_id: The session ID to check
     """
     # Get the primary artist for this session
     artist = await supabase_client.get_session_primary_artist(session_id)
     if not artist:
-        logger.warning(f"Could not determine primary artist for session {session_id}")
+        logger.warning(f"[GLOBAL] Could not determine primary artist for session_id={session_id}")
         return
     
-    # Check if this artist is already being updated (race condition prevention)
+    # Check if this artist is already being updated (per-worker deduplication)
     if artist in _global_update_locks:
-        logger.debug(f"[GLOBAL] Artist '{artist}' is already being updated - skipping")
+        logger.debug(f"[GLOBAL] Artist artist='{artist}' already being updated in this worker - skipping")
         return
     
     # Check when this artist was last updated
     stats = await supabase_client.get_artist_stats(artist)
+    last_update = stats.get("last_global_update_at") if stats else None
     
-    if not stats:
-        # Never updated before - trigger update
-        _global_update_locks.add(artist)
-        task_queue.enqueue(run_global_ranking_update, artist)
-        logger.info(f"[GLOBAL] Enqueued global ranking update for artist: {artist}")
+    # Use shared utility to check if update should be triggered
+    # Pass pending_comparisons=1 to indicate there's at least one new comparison
+    if not await should_trigger_global_update(artist, last_update, pending_comparisons=1):
         return
     
-    # Check if enough time has passed since last update
-    last_update = stats.get("last_global_update_at")
-    if not last_update:
-        return
-        
-    # Parse the timestamp (comes as ISO string from Supabase)
-    # Always use UTC timezone for comparison
-    if isinstance(last_update, str):
-        last_update_dt = datetime.fromisoformat(last_update.replace('Z', '+00:00'))
-    else:
-        last_update_dt = last_update
+    # Enqueue the update
+    _global_update_locks.add(artist)
+    task_queue.enqueue(run_global_ranking_update, artist)
     
-    time_since_update = datetime.now(timezone.utc) - last_update_dt
-    interval_threshold = timedelta(minutes=GLOBAL_UPDATE_INTERVAL_MINUTES)
-    
-    if time_since_update >= interval_threshold:
-        _global_update_locks.add(artist)
-        task_queue.enqueue(run_global_ranking_update, artist)
-        logger.info(f"[GLOBAL] Enqueued global ranking update for artist: {artist} (last updated {time_since_update.total_seconds():.0f}s ago)")
+    if last_update:
+        time_since = get_seconds_since_update(last_update)
+        logger.info(
+            f"[GLOBAL] Enqueued global ranking update for artist='{artist}' "
+            f"(last_updated={time_since:.0f}s ago)"
+        )
     else:
-        logger.debug(f"[GLOBAL] Artist '{artist}' updated recently ({time_since_update.total_seconds():.0f}s ago) - skipping")
+        logger.info(f"[GLOBAL] Enqueued global ranking update for artist='{artist}' (first update)")
 
-def run_deep_deduplication(session_id: str):
+def run_deep_deduplication(session_id: str) -> None:
     """Synchronous wrapper for deduplication task."""
-    logger.info(f"Worker processing deduplication for session {session_id}")
+    logger.info(f"[WORKER] Processing deduplication for session_id={session_id}")
     try:
         _run_async_task(deep_deduplicate_session(session_id))
     except Exception as e:
-        logger.error(f"Worker failed deduplication for {session_id}: {e}")
+        logger.error(f"[WORKER] Failed deduplication for session_id={session_id}: {e}")
         raise
 
-async def process_ranking_update(session_id: str):
+async def process_ranking_update(session_id: str) -> None:
     """Compute and persist session-level Bradley-Terry rankings."""
     import time
     start_time = time.time()
-    logger.info(f"[TIMING] Starting ranking update for session {session_id}")
+    logger.info(f"[TIMING] Starting ranking update for session_id={session_id}")
     
     # 1. Fetch all session data in parallel
     fetch_start = time.time()
@@ -98,7 +104,7 @@ async def process_ranking_update(session_id: str):
     logger.info(f"[TIMING] Data fetch took {fetch_time:.2f}ms")
     
     if not songs:
-        logger.warning(f"No songs found for session {session_id}")
+        logger.warning(f"[RANKING] No songs found for session_id={session_id}")
         return
 
     # 2. Get previous ranking for stability calculation
@@ -130,7 +136,7 @@ async def process_ranking_update(session_id: str):
     stability_score = RankingManager.calculate_stability_score(prev_top_ids, curr_top_ids)
     convergence_score = RankingManager.calculate_final_convergence(quantity_score, stability_score)
     
-    logger.info(f"Session {session_id}: Quantity={quantity_score:.2f}, Stability={stability_score:.2f}, Final={convergence_score}")
+    logger.info(f"[RANKING] Session session_id={session_id}: quantity={quantity_score:.2f}, stability={stability_score:.2f}, convergence={convergence_score}")
     
     # 6. Persist results to database
     persist_start = time.time()
@@ -139,28 +145,31 @@ async def process_ranking_update(session_id: str):
     logger.info(f"[TIMING] Database persist took {persist_time:.2f}ms")
     
     total_time = (time.time() - start_time) * 1000
-    logger.info(f"[TIMING] ✅ Completed ranking update for session {session_id} in {total_time:.2f}ms")
+    logger.info(f"[TIMING] Completed ranking update for session_id={session_id} in {total_time:.2f}ms")
     
     # 7. Trigger global ranking update if enough time has passed
     await _maybe_trigger_global_update(session_id)
 
-def run_ranking_update(session_id: str):
+def run_ranking_update(session_id: str) -> None:
     """Synchronous wrapper for ranking update task."""
-    logger.info(f"Worker processing ranking update for session {session_id}")
+    logger.info(f"[WORKER] Processing ranking update for session_id={session_id}")
     try:
         _run_async_task(process_ranking_update(session_id))
     except Exception as e:
-        logger.error(f"Worker failed ranking update for {session_id}: {e}")
+        logger.error(f"[WORKER] Failed ranking update for session_id={session_id}: {e}")
         raise
 
-async def process_global_ranking(artist: str):
+async def process_global_ranking(artist: str) -> None:
     """
     Compute global rankings for all songs by a specific artist.
     Aggregates comparisons across all user sessions.
+    
+    Args:
+        artist: The artist name
     """
     import time
     start_time = time.time()
-    logger.info(f"[GLOBAL] Starting global ranking update for artist: {artist}")
+    logger.info(f"[GLOBAL] Starting global ranking update for artist='{artist}'")
     
     # 1. Fetch all songs and comparisons for this artist in parallel
     fetch_start = time.time()
@@ -169,15 +178,15 @@ async def process_global_ranking(artist: str):
         supabase_client.get_artist_comparisons(artist)
     )
     fetch_time = (time.time() - fetch_start) * 1000
-    logger.info(f"[GLOBAL] Fetched {len(songs)} songs and {len(comparisons)} comparisons in {fetch_time:.2f}ms")
+    logger.info(f"[GLOBAL] Fetched songs={len(songs)}, comparisons={len(comparisons)} in {fetch_time:.2f}ms for artist='{artist}'")
     
     if not songs:
-        logger.warning(f"[GLOBAL] No songs found for artist: {artist}")
+        logger.warning(f"[GLOBAL] No songs found for artist='{artist}'")
         return
     
     # 2. Handle case with no comparisons yet - initialize with defaults
     if not comparisons:
-        logger.warning(f"[GLOBAL] No comparisons found for artist: {artist}")
+        logger.warning(f"[GLOBAL] No comparisons found for artist='{artist}'")
         updates = [
             {
                 "song_id": str(s["song_id"]),
@@ -232,38 +241,61 @@ async def process_global_ranking(artist: str):
     logger.info(f"[GLOBAL] Database persist took {persist_time:.2f}ms")
     
     total_time = (time.time() - start_time) * 1000
-    logger.info(f"[GLOBAL] ✅ Completed global ranking for {artist} in {total_time:.2f}ms")
+    logger.info(f"[GLOBAL] Completed global ranking for artist='{artist}' in {total_time:.2f}ms")
 
-def run_global_ranking_update(artist: str):
-    """Synchronous wrapper for global ranking update task."""
-    logger.info(f"Worker processing global ranking update for artist: {artist}")
+def _release_redis_lock(lock_key: str) -> None:
+    """
+    Release Redis lock, handling errors gracefully.
     
-    # Import here to avoid circular dependency
+    Args:
+        lock_key: The Redis lock key to release
+    """
     import redis as redis_sync
     from app.core.config import settings
     
-    redis_conn = None
-    lock_key = f"global_update_lock:{artist}"
+    try:
+        redis_conn = redis_sync.from_url(settings.REDIS_URL)
+        redis_conn.delete(lock_key)
+        logger.debug(f"[GLOBAL] Released Redis lock: {lock_key}")
+    except Exception as e:
+        logger.error(f"[GLOBAL] Failed to release Redis lock '{lock_key}': {e}")
+
+
+def _cleanup_locks(artist: str) -> None:
+    """
+    Clean up both in-memory and Redis locks.
+    
+    Uses two lock mechanisms:
+    - In-memory lock: Prevents duplicate enqueues within this worker process
+    - Redis lock: Prevents duplicate updates across all worker instances
+    
+    Args:
+        artist: The artist name
+    """
+    # Remove in-memory lock
+    _global_update_locks.discard(artist)
+    
+    # Remove Redis lock
+    lock_key = get_global_update_lock_key(artist)
+    _release_redis_lock(lock_key)
+
+
+def run_global_ranking_update(artist: str) -> None:
+    """
+    Synchronous wrapper for global ranking update task.
+    
+    Args:
+        artist: The artist name
+    """
+    logger.info(f"[WORKER] Processing global ranking update for artist='{artist}'")
     
     try:
-        # Connect to Redis to clear the lock when done
-        redis_conn = redis_sync.from_url(settings.REDIS_URL)
-        
         _run_async_task(process_global_ranking(artist))
     except Exception as e:
-        logger.error(f"Worker failed global ranking for {artist}: {e}")
+        logger.error(f"[WORKER] Failed global ranking for artist='{artist}': {e}")
         raise
     finally:
-        # Remove in-memory lock when task completes (success or failure)
-        _global_update_locks.discard(artist)
-        
-        # Remove Redis lock
-        if redis_conn:
-            try:
-                redis_conn.delete(lock_key)
-                logger.debug(f"[GLOBAL] Released Redis lock for '{artist}'")
-            except Exception as e:
-                logger.error(f"[GLOBAL] Failed to release Redis lock for '{artist}': {e}")
+        _cleanup_locks(artist)
 
 def run_spotify_method(method_name: str, **kwargs) -> Any:
     """
