@@ -122,6 +122,7 @@ async def _maybe_trigger_update_on_view(artist: str, result: dict, background_ta
     Trigger a global ranking update if:
     1. There are pending comparisons
     2. The ranking hasn't been updated in 10+ minutes
+    3. No update is currently in progress (checked via Redis lock)
     
     This ensures that leaderboards eventually update even if no one is actively ranking.
     """
@@ -148,14 +149,25 @@ async def _maybe_trigger_update_on_view(artist: str, result: dict, background_ta
         interval_threshold = timedelta(minutes=GLOBAL_UPDATE_INTERVAL_MINUTES)
         
         if time_since_update >= interval_threshold:
-            # Trigger update in background
-            from app.core.queue import task_queue
-            from app.tasks import run_global_ranking_update
+            # Check if update is already in progress using Redis lock
+            from app.core.queue import get_async_redis
+            redis = get_async_redis()
+            lock_key = f"global_update_lock:{artist}"
             
-            background_tasks.add_task(
-                lambda: task_queue.enqueue(run_global_ranking_update, artist)
-            )
-            logger.info(f"[GLOBAL] Triggered update for '{artist}' on leaderboard view ({pending} pending, {time_since_update.total_seconds():.0f}s since last update)")
+            # Try to acquire lock (set if not exists, expire in 5 minutes)
+            lock_acquired = await redis.set(lock_key, "1", ex=300, nx=True)
+            
+            if lock_acquired:
+                # We got the lock - trigger update
+                from app.core.queue import task_queue
+                from app.tasks import run_global_ranking_update
+                
+                background_tasks.add_task(
+                    lambda: task_queue.enqueue(run_global_ranking_update, artist)
+                )
+                logger.info(f"[GLOBAL] Triggered update for '{artist}' on leaderboard view ({pending} pending, {time_since_update.total_seconds():.0f}s since last update)")
+            else:
+                logger.debug(f"[GLOBAL] Update already in progress for '{artist}' - skipping")
         else:
             logger.debug(f"[GLOBAL] Skipping update for '{artist}' - only {time_since_update.total_seconds():.0f}s since last update")
     

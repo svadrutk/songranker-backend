@@ -237,14 +237,33 @@ async def process_global_ranking(artist: str):
 def run_global_ranking_update(artist: str):
     """Synchronous wrapper for global ranking update task."""
     logger.info(f"Worker processing global ranking update for artist: {artist}")
+    
+    # Import here to avoid circular dependency
+    import redis as redis_sync
+    from app.core.config import settings
+    
+    redis_conn = None
+    lock_key = f"global_update_lock:{artist}"
+    
     try:
+        # Connect to Redis to clear the lock when done
+        redis_conn = redis_sync.from_url(settings.REDIS_URL)
+        
         _run_async_task(process_global_ranking(artist))
     except Exception as e:
         logger.error(f"Worker failed global ranking for {artist}: {e}")
         raise
     finally:
-        # Remove lock when task completes (success or failure)
+        # Remove in-memory lock when task completes (success or failure)
         _global_update_locks.discard(artist)
+        
+        # Remove Redis lock
+        if redis_conn:
+            try:
+                redis_conn.delete(lock_key)
+                logger.debug(f"[GLOBAL] Released Redis lock for '{artist}'")
+            except Exception as e:
+                logger.error(f"[GLOBAL] Failed to release Redis lock for '{artist}': {e}")
 
 def run_spotify_method(method_name: str, **kwargs) -> Any:
     """
