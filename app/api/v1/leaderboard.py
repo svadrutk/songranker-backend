@@ -34,7 +34,7 @@ class LeaderboardResponse(BaseModel):
     artist: str
     songs: List[LeaderboardSong]
     total_comparisons: int
-    pending_comparisons: int
+    pending_comparisons: int = 0  # Default to 0 for backward compatibility with old cache
     last_updated: Optional[str] = None
 
 
