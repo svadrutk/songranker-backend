@@ -1,116 +1,52 @@
-# Song Ranker - Backend
+# SongRanker Backend
 
-**Status**: 🚧 In Development  
-**Repository**: https://github.com/svadrutk/songranker-backend.git
+FastAPI backend for the SongRanker application.
 
----
+## Features
 
-## 📋 **Overview**
+- **Session-based Ranking**: Personal song rankings using Bradley-Terry model
+- **Global Leaderboard**: Platform-wide rankings aggregated across all users
+- **Smart Deduplication**: Automated fuzzy matching to eliminate duplicate songs
+- **Background Workers**: Async ranking calculations via Redis/RQ
+- **Caching**: Redis-based caching for fast API responses
 
-This repository contains the backend code for Song Ranker, including database schema, SQL migrations, and PostgreSQL functions deployed to Supabase.
+## API Endpoints
 
-**Database Host**: Supabase PostgreSQL  
-**Project URL**: https://loqddpjjjakaqgtuvoyn.supabase.co
+### Search & Sessions
+- `GET /search` - Search for artists and albums
+- `GET /tracks/{release_group_id}` - Get track list for an album
+- `POST /sessions` - Create new ranking session
+- `GET /sessions/{session_id}` - Get session details
+- `POST /sessions/{session_id}/comparisons` - Record a song comparison
 
----
+### Global Leaderboard (New)
+- `GET /leaderboard/{artist}` - Get top songs for an artist (global rankings)
+- `GET /leaderboard/{artist}/stats` - Get artist statistics
 
-## 🚀 **Quick Start**
+### Image Generation
+- `POST /generate-receipt` - Generate shareable receipt image
 
-See [docs/SETUP.md](./docs/SETUP.md) for complete setup instructions.
+## API Specification Sync
 
-**Quick Setup**:
-1. Clone this repository
-2. Access Supabase Dashboard: https://loqddpjjjakaqgtuvoyn.supabase.co
-3. Use SQL Editor to run migrations and functions
+To keep the frontend API client up to date, we maintain an `openapi.json` file in the `songranker-frontend` directory.
 
----
+### Automation
+Whenever the API structure changes, run:
 
-## 📚 **Documentation**
-
-All backend documentation is located in the `docs/` folder:
-
-### **Essential Documents**
-
-1. **SETUP.md** ⭐  
-   - Backend setup and development workflow  
-   - Database connection instructions  
-   - Migration and function creation guidelines  
-   - **Update**: When setup process changes
-
-2. **SCHEMA.md** ⭐  
-   - Complete database schema documentation  
-   - Table definitions and relationships  
-   - Indexes and constraints  
-   - **Update**: After any schema changes
-
-3. **MIGRATIONS.md** ⭐  
-   - Migration history and tracking  
-   - Migration guidelines and best practices  
-   - **Update**: After creating new migrations
-
-4. **API.md** ⭐  
-   - Database functions and stored procedures  
-   - Function parameters and return types  
-   - Frontend integration examples  
-   - **Update**: When functions are added or modified
-
----
-
-## 🗄️ **Database**
-
-- **Type**: PostgreSQL (via Supabase)
-- **Host**: db.loqddpjjjakaqgtuvoyn.supabase.co
-- **Access**: Supabase Dashboard or connection string
-
----
-
-## 📁 **Repository Structure**
-
-```
-songranker-backend/
-├── docs/                    # Documentation
-│   ├── SETUP.md            # Setup guide
-│   ├── SCHEMA.md           # Database schema
-│   ├── MIGRATIONS.md       # Migration history
-│   └── API.md              # Function reference
-├── migrations/             # SQL migration files (to be created)
-└── functions/              # SQL function files (to be created)
+```bash
+python scripts/export_openapi.py
 ```
 
----
+This script:
+1. Extracts the OpenAPI schema from the FastAPI app
+2. Saves it to `../songranker-frontend/openapi.json`
+3. Updates TypeScript types for the frontend
 
-## 🔗 **Related Repositories**
+## Recent Updates
 
-- **Frontend**: https://github.com/svadrutk/songranker-frontend.git
-- **Frontend Documentation**: See `key_documentation/` in frontend repo
-
----
-
-## 📝 **Project Status**
-
-**Current Phase**: Phase 0 - Foundation & Setup
-
-**Completed**:
-- ✅ Git repository initialized
-- ✅ Documentation structure established
-
-**In Progress**:
-- 🚧 Database schema design
-- 🚧 Migration scripts
-- 🚧 Database functions
-
----
-
-## 🤝 **Contributing**
-
-This is a personal project. For questions or suggestions, please open an issue on GitHub.
-
----
-
-## 📄 **License**
-
-Private project - All rights reserved.
-
----
-
-**Last Updated**: January 2025
+### 2026-01-24 - Global Leaderboard
+- **Added**: Global leaderboard endpoints for cross-session rankings
+- **Performance**: Batch + interval update strategy (10-min intervals per artist)
+- **Caching**: Redis caching with 2-minute TTL for leaderboard queries
+- **Database**: New `artist_stats` table and global ranking columns in `songs` table
+- **Migration**: Run `supabase_global_leaderboard.sql` to update schema
