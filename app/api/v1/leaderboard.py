@@ -39,49 +39,59 @@ class LeaderboardResponse(BaseModel):
     """Response for the global leaderboard."""
     artist: str
     songs: List[LeaderboardSong]
-    total_comparisons: int
-    pending_comparisons: int = 0  # Default to 0 for backward compatibility with old cache
+    total_comparisons: int  # Number of comparisons already processed into global Elo
+    pending_comparisons: int = 0  # Number of comparisons waiting for next global update
     last_updated: Optional[str] = None
+
+
+def _map_leaderboard_song(song_data: Dict[str, Any], index: int) -> Dict[str, Any]:
+    """Map database song fields to API response model fields."""
+    return {
+        "id": str(song_data["id"]),
+        "name": song_data["name"],
+        "artist": song_data["artist"],
+        "album": song_data.get("album"),
+        "album_art_url": song_data.get("cover_url"), # Map cover_url to album_art_url
+        "global_elo": song_data["global_elo"],
+        "global_bt_strength": song_data["global_bt_strength"],
+        "global_votes_count": song_data["global_votes_count"],
+        "rank": index + 1
+    }
 
 
 async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[Dict[str, Any]]:
     """Fetch leaderboard and artist stats, then build response as a dict for caching."""
-    songs_data, stats, total_comparisons = await asyncio.gather(
-        supabase_client.get_leaderboard(artist, limit),
-        supabase_client.get_artist_stats(artist),
-        supabase_client.get_artist_total_comparisons(artist)
-    )
-    
-    if not songs_data:
-        return None
-    
-    songs = [
-        {
-            "id": str(s["id"]),
-            "name": s["name"],
-            "artist": s["artist"],
-            "album": s.get("album"),
-            "album_art_url": s.get("cover_url"),  # Map cover_url to album_art_url for API response
-            "global_elo": s["global_elo"],
-            "global_bt_strength": s["global_bt_strength"],
-            "global_votes_count": s["global_votes_count"],
-            "rank": idx + 1
+    try:
+        songs_data, stats, total_comparisons = await asyncio.gather(
+            supabase_client.get_leaderboard(artist, limit),
+            supabase_client.get_artist_stats(artist),
+            supabase_client.get_artist_total_comparisons(artist)
+        )
+        
+        # Calculate pending comparisons (total - processed)
+        processed_comparisons, pending_comparisons = calculate_pending_comparisons(
+            total_comparisons, stats
+        )
+        
+        logger.info(f"[API] Leaderboard for '{artist}': songs={len(songs_data) if songs_data else 0}, processed={processed_comparisons}, pending={pending_comparisons}")
+        
+        # If no songs are ranked AND there are zero comparisons total, then the artist is truly empty
+        if not songs_data and total_comparisons == 0:
+            logger.warning(f"[API] No ranking data found for artist '{artist}' (songs=0, total_comp=0)")
+            return None
+        
+        songs = [_map_leaderboard_song(s, idx) for idx, s in enumerate(songs_data)]
+        
+        return {
+            "artist": artist,
+            "songs": songs,
+            "total_comparisons": processed_comparisons,
+            "pending_comparisons": pending_comparisons,
+            "last_updated": stats.get("last_global_update_at") if stats else None
         }
-        for idx, s in enumerate(songs_data)
-    ]
-    
-    # Calculate pending comparisons (total - processed)
-    processed_comparisons, pending_comparisons = calculate_pending_comparisons(
-        total_comparisons, stats
-    )
-    
-    return {
-        "artist": artist,
-        "songs": songs,
-        "total_comparisons": processed_comparisons,
-        "pending_comparisons": pending_comparisons,
-        "last_updated": stats.get("last_global_update_at") if stats else None
-    }
+    except Exception as e:
+        logger.error(f"[API] Error fetching leaderboard data for '{artist}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error fetching leaderboard: {e}")
 
 
 @router.get("/leaderboard/{artist}", response_model=LeaderboardResponse)
@@ -99,30 +109,25 @@ async def get_global_leaderboard(
     - **artist**: The artist name (must match exactly as stored in the database)
     - **limit**: Maximum number of songs to return (default: 100, max: 500)
     
-    If there are pending comparisons and the ranking hasn't updated in 10+ minutes,
+    If there are pending comparisons and the ranking hasn't updated in the required interval,
     this endpoint will trigger a background global ranking update.
     """
     logger.info(f"[API] GET /leaderboard/{artist} limit={limit}")
     
-    # Cache the leaderboard for 2 minutes to handle traffic bursts
-    cache_key = f"leaderboard:{artist}:{limit}"
-    result = await cache.get_or_fetch(
-        cache_key,
-        lambda: fetch_leaderboard_data(artist, limit),
-        ttl_seconds=120,
-        background_tasks=background_tasks
-    )
+    # Fetch directly from DB to avoid cache confusion
+    result = await fetch_leaderboard_data(artist, limit)
     
-    if result is None:
+    if result is None or (result.get("total_comparisons", 0) == 0 and result.get("pending_comparisons", 0) == 0):
         raise HTTPException(
             status_code=404,
-            detail=f"No leaderboard data found for artist: {artist}"
+            detail=f"No ranking data found for artist: {artist}"
         )
     
     # Trigger global update if needed (pending comparisons + stale data)
     await _maybe_trigger_update_on_view(artist, result, background_tasks)
     
     return result
+
 
 async def _try_acquire_update_lock(artist: str) -> bool:
     """
@@ -161,7 +166,7 @@ def _enqueue_global_update(
         background_tasks: FastAPI background tasks
         result: Leaderboard result dict containing pending comparisons and last_updated
     """
-    from app.core.queue import task_queue
+    from app.core.queue import leaderboard_queue
     from app.tasks import run_global_ranking_update
     
     pending = result.get("pending_comparisons", 0)
@@ -169,7 +174,7 @@ def _enqueue_global_update(
     
     # Enqueue the task using background_tasks.add_task with proper function reference
     background_tasks.add_task(
-        task_queue.enqueue,
+        leaderboard_queue.enqueue,
         run_global_ranking_update,
         artist
     )
@@ -242,21 +247,21 @@ async def get_artist_leaderboard_stats(request: Request, artist: str) -> Dict[st
         supabase_client.get_artist_total_comparisons(artist)
     )
     
-    if not stats:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No statistics found for artist: {artist}"
-        )
-    
     # Calculate pending comparisons
     processed_comparisons, pending_comparisons = calculate_pending_comparisons(
         total_comparisons, stats
     )
     
+    if total_comparisons == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No ranking data found for artist: {artist}"
+        )
+    
     return {
         "artist": artist,
         "total_comparisons": processed_comparisons,
         "pending_comparisons": pending_comparisons,
-        "last_updated": stats.get("last_global_update_at"),
-        "created_at": stats.get("created_at")
+        "last_updated": stats.get("last_global_update_at") if stats else None,
+        "created_at": stats.get("created_at") if stats else None
     }

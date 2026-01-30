@@ -221,10 +221,10 @@ useEffect(() => {
 **Debug:**
 ```bash
 # Check worker is running
-docker-compose logs worker_default
+docker-compose logs worker_leaderboard
 
 # Check queue
-redis-cli LLEN rq:queue:default
+redis-cli LLEN rq:queue:leaderboard
 
 # Check for failed jobs
 redis-cli LRANGE rq:queue:failed 0 -1
@@ -267,7 +267,7 @@ def update_all_stale_rankings():
     artists = get_artists_with_pending_comparisons()
     for artist in artists:
         if time_since_update(artist) >= 10:
-            task_queue.enqueue(run_global_ranking_update, artist)
+            leaderboard_queue.enqueue(run_global_ranking_update, artist)
 ```
 
 ### 3. Smart Throttling

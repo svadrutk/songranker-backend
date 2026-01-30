@@ -36,6 +36,9 @@ class ReleaseGroupResponse(BaseModel):
     type: Optional[str] = None
     cover_art: CoverArtArchive
 
+class ArtistSuggestion(BaseModel):
+    name: str
+
 class TrackResponse(BaseModel):
     tracks: List[str]
 
@@ -210,6 +213,46 @@ async def search(request: Request, background_tasks: BackgroundTasks, query: str
     )
 
     return results
+
+async def _get_artist_suggestions(query: str, client: httpx.AsyncClient) -> List[Dict[str, str]]:
+    """Get artist name suggestions from Spotify or Last.fm."""
+    # 1. Try Spotify first if available
+    if settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET:
+        try:
+            # We use a lightweight search for artists only
+            search_res = await spotify_client.call_via_worker("search_artists_only", query=query)
+            if search_res:
+                return [{"name": name} for name in search_res[:5]]
+        except Exception as e:
+            logger.error(f"Spotify suggestion failed: {e}")
+
+    # 2. Fallback to Last.fm
+    try:
+        artists = await lastfm_client.search_artist(query, client=client)
+        return [{"name": a["name"]} for a in artists[:5]]
+    except Exception as e:
+        logger.error(f"Last.fm suggestion failed: {e}")
+        return []
+
+@router.get("/suggest", response_model=List[ArtistSuggestion])
+@limiter.limit("60/minute")
+async def suggest(request: Request, background_tasks: BackgroundTasks, query: str = Query(..., min_length=2)):
+    client = request.app.state.http_client
+    
+    # Normalize query for cache key
+    norm_query = re.sub(r'[^a-z0-9]', '', query.lower()).strip()
+    if not norm_query:
+        return []
+
+    cache_key = f"suggest:{norm_query}"
+    results = await cache.get_or_fetch(
+        cache_key,
+        lambda: _get_artist_suggestions(query, client),
+        ttl_seconds=14400, # 4 hours (Medium TTL)
+        background_tasks=background_tasks
+    )
+    
+    return results or []
 
 async def _search_fallback(query: str, client: httpx.AsyncClient):
     """Final fallback to pure MusicBrainz if context fails."""

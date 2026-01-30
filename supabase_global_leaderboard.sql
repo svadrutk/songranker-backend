@@ -83,7 +83,53 @@ BEGIN
 END;
 $$;
 
--- 7. Comment documentation
+-- 7. RPC function to bulk update global rankings (high performance)
+CREATE OR REPLACE FUNCTION bulk_update_song_rankings(
+    p_song_ids UUID[],
+    p_global_elos FLOAT8[],
+    p_global_bt_strengths FLOAT8[],
+    p_global_votes INT4[]
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE songs s
+    SET 
+        global_elo = new_values.global_elo,
+        global_bt_strength = new_values.global_bt_strength,
+        global_votes_count = new_values.global_votes_count
+    FROM unnest(
+        p_song_ids, 
+        p_global_elos, 
+        p_global_bt_strengths, 
+        p_global_votes
+    ) AS new_values(song_id, global_elo, global_bt_strength, global_votes_count)
+    WHERE s.id = new_values.song_id;
+END;
+$$;
+
+-- 8. RPC function to count comparisons for a specific artist (efficient)
+CREATE OR REPLACE FUNCTION count_artist_comparisons(p_artist TEXT)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_count
+    FROM comparisons c
+    INNER JOIN songs sa ON c.song_a_id = sa.id
+    INNER JOIN songs sb ON c.song_b_id = sb.id
+    WHERE sa.artist = p_artist 
+      AND sb.artist = p_artist;
+      
+    RETURN v_count;
+END;
+$$;
+
+-- 9. Comment documentation
 COMMENT ON COLUMN songs.global_elo IS 'Platform-wide Elo rating computed from all user sessions';
 COMMENT ON COLUMN songs.global_bt_strength IS 'Bradley-Terry strength parameter used in global ranking calculations';
 COMMENT ON COLUMN songs.global_votes_count IS 'Total number of comparisons this song has participated in globally';

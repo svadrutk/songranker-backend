@@ -4,7 +4,8 @@ from typing import Dict, Any
 from app.core.deduplication import deep_deduplicate_session
 from app.core.ranking import RankingManager
 from app.clients.supabase_db import supabase_client
-from app.core.queue import task_queue
+from app.core.cache import cache
+from app.core.queue import task_queue, leaderboard_queue
 from app.core.global_ranking_config import (
     GLOBAL_UPDATE_INTERVAL_MINUTES,
     get_global_update_lock_key
@@ -52,7 +53,9 @@ async def _maybe_trigger_global_update(session_id: str) -> None:
         return
     
     # Check if this artist is already being updated (per-worker deduplication)
-    if artist in _global_update_locks:
+    # Use normalized name for consistency
+    norm_artist = artist.lower()
+    if norm_artist in _global_update_locks:
         logger.debug(f"[GLOBAL] Artist artist='{artist}' already being updated in this worker - skipping")
         return
     
@@ -60,14 +63,21 @@ async def _maybe_trigger_global_update(session_id: str) -> None:
     stats = await supabase_client.get_artist_stats(artist)
     last_update = stats.get("last_global_update_at") if stats else None
     
+    if last_update:
+        seconds_since = get_seconds_since_update(last_update)
+        logger.info(
+            f"[GLOBAL] Time check for '{artist}': {seconds_since/60:.1f}m since last update "
+            f"(Interval: {GLOBAL_UPDATE_INTERVAL_MINUTES}m)"
+        )
+
     # Use shared utility to check if update should be triggered
     # Pass pending_comparisons=1 to indicate there's at least one new comparison
     if not await should_trigger_global_update(artist, last_update, pending_comparisons=1):
         return
     
     # Enqueue the update
-    _global_update_locks.add(artist)
-    task_queue.enqueue(run_global_ranking_update, artist)
+    _global_update_locks.add(norm_artist)
+    leaderboard_queue.enqueue(run_global_ranking_update, artist)
     
     if last_update:
         time_since = get_seconds_since_update(last_update)
@@ -78,14 +88,18 @@ async def _maybe_trigger_global_update(session_id: str) -> None:
     else:
         logger.info(f"[GLOBAL] Enqueued global ranking update for artist='{artist}' (first update)")
 
+def _worker_wrapper(coro, task_name: str, identifier: str) -> Any:
+    """Generic wrapper for background worker tasks."""
+    logger.info(f"[WORKER] Starting {task_name} for {identifier}")
+    try:
+        return _run_async_task(coro)
+    except Exception as e:
+        logger.error(f"[WORKER] Failed {task_name} for {identifier}: {e}")
+        raise
+
 def run_deep_deduplication(session_id: str) -> None:
     """Synchronous wrapper for deduplication task."""
-    logger.info(f"[WORKER] Processing deduplication for session_id={session_id}")
-    try:
-        _run_async_task(deep_deduplicate_session(session_id))
-    except Exception as e:
-        logger.error(f"[WORKER] Failed deduplication for session_id={session_id}: {e}")
-        raise
+    _worker_wrapper(deep_deduplicate_session(session_id), "deduplication", f"session_id={session_id}")
 
 async def process_ranking_update(session_id: str) -> None:
     """Compute and persist session-level Bradley-Terry rankings."""
@@ -152,12 +166,7 @@ async def process_ranking_update(session_id: str) -> None:
 
 def run_ranking_update(session_id: str) -> None:
     """Synchronous wrapper for ranking update task."""
-    logger.info(f"[WORKER] Processing ranking update for session_id={session_id}")
-    try:
-        _run_async_task(process_ranking_update(session_id))
-    except Exception as e:
-        logger.error(f"[WORKER] Failed ranking update for session_id={session_id}: {e}")
-        raise
+    _worker_wrapper(process_ranking_update(session_id), "ranking update", f"session_id={session_id}")
 
 async def process_global_ranking(artist: str) -> None:
     """
@@ -272,8 +281,8 @@ def _cleanup_locks(artist: str) -> None:
     Args:
         artist: The artist name
     """
-    # Remove in-memory lock
-    _global_update_locks.discard(artist)
+    # Remove in-memory lock (use normalized name)
+    _global_update_locks.discard(artist.lower())
     
     # Remove Redis lock
     lock_key = get_global_update_lock_key(artist)
@@ -293,9 +302,15 @@ def run_global_ranking_update(artist: str) -> None:
         _run_async_task(process_global_ranking(artist))
     except Exception as e:
         logger.error(f"[WORKER] Failed global ranking for artist='{artist}': {e}")
+        # Only cleanup locks on failure so we can retry
+        # On success, we let the Redis lock expire naturally to provide a cooldown
+        _cleanup_locks(artist)
         raise
     finally:
-        _cleanup_locks(artist)
+        # Remove only the in-memory lock for this worker process
+        # This allows other tasks to be enqueued in this worker, but they will
+        # still be blocked by the Redis lock in the API layer.
+        _global_update_locks.discard(artist.lower())
 
 def run_spotify_method(method_name: str, **kwargs) -> Any:
     """
@@ -304,15 +319,11 @@ def run_spotify_method(method_name: str, **kwargs) -> Any:
     providing natural rate limiting across all Gunicorn instances.
     """
     from app.clients.spotify import spotify_client
-    logger.info(f"[SPOTIFY WORKER] Executing method: {method_name} with args: {kwargs}")
     
-    try:
+    async def _execute():
         method = getattr(spotify_client, method_name)
         # Remove 'client' from kwargs if it exists because the worker uses its own client
         kwargs.pop('client', None)
-        result = _run_async_task(method(**kwargs))
-        logger.info(f"[SPOTIFY WORKER] Successfully completed: {method_name}")
-        return result
-    except Exception as e:
-        logger.error(f"[SPOTIFY WORKER] Failed to execute {method_name}: {e}")
-        raise
+        return await method(**kwargs)
+
+    return _worker_wrapper(_execute(), f"Spotify:{method_name}", str(kwargs.get('query') or kwargs.get('release_group_id') or 'args'))

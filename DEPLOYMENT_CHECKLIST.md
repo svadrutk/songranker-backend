@@ -3,7 +3,7 @@
 ## ✅ Pre-Deployment Verification
 
 ### 1. Code Changes
-- [x] `app/core/queue.py` - Added `spotify_queue`
+- [x] `app/core/queue.py` - Added `spotify_queue` and `leaderboard_queue`
 - [x] `app/tasks.py` - Added `run_spotify_method()` worker task
 - [x] `app/clients/spotify.py` - Added `call_via_worker()` proxy method
 - [x] `app/api/v1/search.py` - Updated to use worker proxy
@@ -11,8 +11,8 @@
 - [x] `pyproject.toml` - Added `tenacity>=9.0.0`
 
 ### 2. Configuration Files
-- [x] `Procfile` - Split into `worker_default` and `worker_spotify`
-- [x] `Dockerfile` - Updated CMD to start both workers
+- [x] `Procfile` - Split into `worker_default`, `worker_spotify`, and `worker_leaderboard`
+- [x] `Dockerfile` - Updated CMD to start all three workers
 - [x] `docker-compose.yml` - Created with proper service separation
 
 ### 3. Documentation
@@ -61,7 +61,7 @@
 
 2. **Scale Dynos**
    ```bash
-   heroku ps:scale worker_default=1 worker_spotify=1
+   heroku ps:scale worker_default=1 worker_spotify=1 worker_leaderboard=1
    ```
 
 3. **Verify**
@@ -71,6 +71,7 @@
    # web.1: up
    # worker_default.1: up
    # worker_spotify.1: up
+   # worker_leaderboard.1: up
    ```
 
 ### For Docker Compose (Local/VPS)
@@ -90,6 +91,7 @@
    ```bash
    docker-compose logs -f worker_spotify
    docker-compose logs -f worker_default
+   docker-compose logs -f worker_leaderboard
    ```
 
 ## 🔍 Post-Deployment Verification

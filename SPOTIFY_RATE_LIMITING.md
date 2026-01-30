@@ -6,10 +6,10 @@ This backend implements a **dedicated worker queue** for all Spotify API calls t
 
 ## Architecture
 
-### Two-Queue System
+### Three-Queue System
 
 1. **`default` Queue (Ranking & Math)**
-   - Handles Bradley-Terry ranking computations
+   - Handles session Bradley-Terry ranking computations
    - Processes session deduplication
    - Fast, CPU-bound tasks
    - Can scale to multiple workers if needed
@@ -19,6 +19,12 @@ This backend implements a **dedicated worker queue** for all Spotify API calls t
    - **MUST run with exactly 1 worker** (critical for rate limiting)
    - Network-bound tasks
    - Serializes traffic to prevent 429 errors
+
+3. **`leaderboard` Queue (Global Math)**
+   - Handles heavy global ranking calculations
+   - Periodic, expensive tasks
+   - Isolated to prevent blocking user-facing tasks
+   - Can scale as needed
 
 ### How It Works
 

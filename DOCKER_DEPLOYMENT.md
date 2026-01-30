@@ -24,6 +24,7 @@ This automatically starts:
 - **Gunicorn** (4 workers) on port 8000
 - **Default Worker** (1 instance) - handles ranking/deduplication
 - **Spotify Worker** (1 instance) - handles Spotify API calls with rate limiting
+- **Leaderboard Worker** (1 instance) - handles heavy global ranking calculations
 
 ### Docker Compose (Development)
 
@@ -54,6 +55,7 @@ services:
   web:          # FastAPI application (4 Gunicorn workers)
   worker_default:   # Ranking/deduplication worker (can scale)
   worker_spotify:   # Spotify API worker (MUST be 1 replica)
+  worker_leaderboard: # Heavy global ranking worker (can scale)
 ```
 
 ## Verifying Workers are Running
@@ -69,6 +71,7 @@ docker-compose ps
 # - web (running)
 # - worker_default (running)
 # - worker_spotify (running)
+# - worker_leaderboard (running)
 
 # View logs for a specific worker
 docker-compose logs -f worker_spotify
@@ -87,6 +90,7 @@ docker-compose exec redis redis-cli
 # Check queue lengths
 LLEN rq:queue:default
 LLEN rq:queue:spotify
+LLEN rq:queue:leaderboard
 
 # List all keys (for debugging)
 KEYS rq:*
@@ -167,7 +171,7 @@ For Heroku, use the `Procfile` instead:
 git push heroku main
 
 # Scale dynos
-heroku ps:scale web=1 worker_default=1 worker_spotify=1
+heroku ps:scale web=1 worker_default=1 worker_spotify=1 worker_leaderboard=1
 
 # Check status
 heroku ps

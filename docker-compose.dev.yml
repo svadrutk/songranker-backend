@@ -29,3 +29,18 @@ services:
       - ./app:/app/app
       - ./worker.py:/app/worker.py
     # Workers will auto-reload when code changes
+
+  worker_leaderboard:
+    build: .
+    volumes:
+      # Mount source code for hot reloading
+      - ./app:/app/app
+      - ./worker.py:/app/worker.py
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python worker.py --queues leaderboard

@@ -1,6 +1,7 @@
 import asyncio
 from typing import Dict, Any, Optional, cast, List
 import logging
+from datetime import datetime, timezone
 from supabase import create_async_client, AsyncClient
 from postgrest.types import CountMethod
 from app.core.config import settings
@@ -133,30 +134,32 @@ class SupabaseDB:
                 .eq("session_id", str(session_id)) \
                 .execute()
             
-            if not res.data or not isinstance(res.data, list):
+            if not res.data:
                 return []
             
             results = []
-            for item in res.data:
-                if not isinstance(item, dict):
+            for item_raw in res.data:
+                if not isinstance(item_raw, dict):
+                    continue
+                item = cast(Dict[str, Any], item_raw)
+                # session_songs join returns 'songs' key with global details
+                details_raw = item.get("songs")
+                if not details_raw:
                     continue
                 
-                songs_data = item.get("songs")
-                if not songs_data:
+                # Handle both object and list return formats from Supabase
+                details_item = details_raw[0] if isinstance(details_raw, list) else details_raw
+                if not isinstance(details_item, dict):
                     continue
-                
-                details = songs_data[0] if isinstance(songs_data, list) else songs_data
-                if not isinstance(details, dict):
-                    continue
+                details = cast(Dict[str, Any], details_item)
                 
                 # Merge session-specific stats with global song details
-                song_info = {
+                results.append({
                     "song_id": str(item.get("song_id", "")),
                     "local_elo": item.get("local_elo", 1500.0),
                     "bt_strength": item.get("bt_strength"),
-                }
-                song_info.update({k: v for k, v in details.items() if k != "id"})
-                results.append(song_info)
+                    **{k: v for k, v in details.items() if k != "id"}
+                })
 
             return results
         except Exception as e:
@@ -321,7 +324,9 @@ class SupabaseDB:
 
     async def update_global_rankings(self, updates: List[Dict[str, Any]]):
         """
-        Bulk update global rankings for songs.
+        Bulk update global rankings for songs using a dedicated RPC function.
+        This is significantly more efficient than individual updates as it runs
+        in a single database transaction with one API call.
         
         updates: List of dicts with {song_id, global_elo, global_bt_strength, global_votes_count}
         """
@@ -330,16 +335,34 @@ class SupabaseDB:
             
         client = await self.get_client()
         
-        # Update each song individually (Supabase doesn't support bulk update easily)
-        # This is acceptable because global updates happen in background
-        for u in updates:
-            await client.table("songs").update({
-                "global_elo": u["global_elo"],
-                "global_bt_strength": u["global_bt_strength"],
-                "global_votes_count": u.get("global_votes_count", 0)
-            }).eq("id", str(u["song_id"])).execute()
-        
-        logger.info(f"Successfully updated global rankings for {len(updates)} songs")
+        try:
+            # Convert list of dicts to parallel arrays for the RPC call
+            song_ids = [str(u["song_id"]) for u in updates]
+            global_elos = [float(u["global_elo"]) for u in updates]
+            global_bt_strengths = [float(u["global_bt_strength"]) for u in updates]
+            global_votes = [int(u.get("global_votes_count", 0)) for u in updates]
+
+            await client.rpc("bulk_update_song_rankings", {
+                "p_song_ids": song_ids,
+                "p_global_elos": global_elos,
+                "p_global_bt_strengths": global_bt_strengths,
+                "p_global_votes": global_votes
+            }).execute()
+            
+            logger.info(f"Successfully updated global rankings for {len(updates)} songs via RPC")
+        except Exception as e:
+            logger.error(f"Failed to update global rankings via RPC: {e}")
+            # Fallback to sequential updates if RPC fails (e.g. if not yet deployed)
+            logger.info("Falling back to sequential updates...")
+            for u in updates:
+                try:
+                    await client.table("songs").update({
+                        "global_elo": u["global_elo"],
+                        "global_bt_strength": u["global_bt_strength"],
+                        "global_votes_count": u.get("global_votes_count", 0)
+                    }).eq("id", str(u["song_id"])).execute()
+                except Exception as ex:
+                    logger.error(f"Sequential fallback failed for song {u['song_id']}: {ex}")
 
     async def get_artist_stats(self, artist: str) -> Optional[Dict[str, Any]]:
         """Get statistics for an artist including last update timestamp."""
@@ -355,29 +378,32 @@ class SupabaseDB:
         return None
 
     async def get_artist_total_comparisons(self, artist: str) -> int:
-        """
-        Get the total number of comparisons for an artist across all sessions.
-        This includes both processed (in global rankings) and pending comparisons.
-        
-        Note: This currently fetches all comparison data just to count them.
-        For better performance with popular artists, consider creating a dedicated
-        database function 'get_artist_comparisons_count(p_artist)' that returns
-        just the count.
-        """
+        """Get the total number of comparisons made for an artist."""
         client = await self.get_client()
-        response = await client.rpc("get_artist_comparisons", {
-            "p_artist": artist
-        }).execute()
-        
-        comparisons = cast(List[Dict[str, Any]], response.data or [])
-        return len(comparisons)
+        try:
+            response = await client.rpc("count_artist_comparisons", {
+                "p_artist": artist
+            }).execute()
+            
+            if response.data is not None:
+                return int(cast(Any, response.data))
+        except Exception as e:
+            logger.warning(f"RPC count_artist_comparisons failed, falling back to full fetch: {e}")
+            
+        # Fallback to fetching all comparisons and counting in Python
+        try:
+            comparisons = await self.get_artist_comparisons(artist)
+            return len(comparisons)
+        except Exception as e:
+            logger.error(f"Fallback counting failed for artist {artist}: {e}")
+            return 0
 
     async def upsert_artist_stats(self, artist: str, comparison_count: int):
         """Update or insert artist statistics."""
         client = await self.get_client()
         await client.table("artist_stats").upsert({
             "artist": artist,
-            "last_global_update_at": "now()",
+            "last_global_update_at": datetime.now(timezone.utc).isoformat(),
             "total_comparisons_count": comparison_count
         }, on_conflict="artist").execute()
         
@@ -389,6 +415,7 @@ class SupabaseDB:
         response = await client.table("songs") \
             .select("id, name, artist, album, cover_url, global_elo, global_bt_strength, global_votes_count") \
             .eq("artist", artist) \
+            .gt("global_votes_count", 0) \
             .order("global_elo", desc=True) \
             .limit(limit) \
             .execute()
