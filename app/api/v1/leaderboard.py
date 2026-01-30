@@ -107,10 +107,10 @@ async def get_global_leaderboard(
     # Fetch directly from DB to avoid cache confusion
     result = await fetch_leaderboard_data(artist, limit)
     
-    if result is None:
+    if result is None or (result.get("total_comparisons", 0) == 0 and result.get("pending_comparisons", 0) == 0):
         raise HTTPException(
             status_code=404,
-            detail=f"No leaderboard data found for artist: {artist}"
+            detail=f"No ranking data found for artist: {artist}"
         )
     
     # Trigger global update if needed (pending comparisons + stale data)
@@ -247,6 +247,12 @@ async def get_artist_leaderboard_stats(request: Request, artist: str) -> Dict[st
     processed_comparisons, pending_comparisons = calculate_pending_comparisons(
         total_comparisons, stats
     )
+    
+    if processed_comparisons == 0 and pending_comparisons == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No ranking data found for artist: {artist}"
+        )
     
     return {
         "artist": artist,
