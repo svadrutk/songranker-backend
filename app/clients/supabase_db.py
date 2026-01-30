@@ -410,6 +410,7 @@ class SupabaseDB:
         response = await client.table("songs") \
             .select("id, name, artist, album, cover_url, global_elo, global_bt_strength, global_votes_count") \
             .eq("artist", artist) \
+            .gt("global_votes_count", 0) \
             .order("global_elo", desc=True) \
             .limit(limit) \
             .execute()
