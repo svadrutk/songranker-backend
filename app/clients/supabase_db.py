@@ -377,6 +377,20 @@ class SupabaseDB:
             return cast(Dict[str, Any], response.data[0])
         return None
 
+    async def get_artists_with_leaderboards(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get all artists that have global leaderboards, ordered by comparison count (desc)."""
+        client = await self.get_client()
+        try:
+            response = await client.table("artist_stats") \
+                .select("artist, total_comparisons_count, last_global_update_at") \
+                .order("total_comparisons_count", desc=True) \
+                .limit(limit) \
+                .execute()
+            return cast(List[Dict[str, Any]], response.data or [])
+        except Exception as e:
+            logger.error(f"Failed to get artists with leaderboards: {e}")
+            return []
+
     async def get_artist_total_comparisons(self, artist: str) -> int:
         """Get the total number of comparisons made for an artist."""
         client = await self.get_client()
