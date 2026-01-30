@@ -125,12 +125,9 @@ async def get_global_leaderboard(
         )
     
     # Trigger global update if needed (pending comparisons + stale data)
-    # BUT: only trigger if we just performed a fresh fetch (not a stale cache hit)
-    # This prevents the loop where stale memory cache keeps triggering the worker
-    if not metadata.get("is_stale", False):
-        await _maybe_trigger_update_on_view(artist, result, background_tasks)
-    else:
-        logger.debug(f"[GLOBAL] Skipping trigger check for '{artist}' because data is from stale cache (revalidation in progress)")
+    # Trigger even if metadata says is_stale=True, because the background revalidation
+    # of the cache only refreshes the VIEW, it doesn't trigger the WORKER to process votes.
+    await _maybe_trigger_update_on_view(artist, result, background_tasks)
     
     return result
 

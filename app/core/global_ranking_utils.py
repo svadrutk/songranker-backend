@@ -96,12 +96,18 @@ async def should_trigger_global_update(
         logger.info(f"[GLOBAL] No previous update for artist='{artist}' - triggering first update")
         return True
     
-    if not is_update_stale(last_updated):
-        seconds_since = get_seconds_since_update(last_updated)
-        logger.debug(
+    seconds_since = get_seconds_since_update(last_updated)
+    threshold_seconds = GLOBAL_UPDATE_INTERVAL_MINUTES * 60
+    
+    if seconds_since < threshold_seconds:
+        logger.info(
             f"[GLOBAL] Skipping update for artist='{artist}' - "
-            f"only {seconds_since:.0f}s since last update"
+            f"only {seconds_since/60:.1f}m since last update (Threshold: {GLOBAL_UPDATE_INTERVAL_MINUTES}m)"
         )
         return False
     
+    logger.info(
+        f"[GLOBAL] Triggering update for artist='{artist}' - "
+        f"{pending_comparisons} pending, {seconds_since/60:.1f}m since last update"
+    )
     return True
