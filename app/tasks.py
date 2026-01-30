@@ -4,7 +4,8 @@ from typing import Dict, Any
 from app.core.deduplication import deep_deduplicate_session
 from app.core.ranking import RankingManager
 from app.clients.supabase_db import supabase_client
-from app.core.queue import task_queue
+from app.core.cache import cache
+from app.core.queue import task_queue, leaderboard_queue
 from app.core.global_ranking_config import (
     GLOBAL_UPDATE_INTERVAL_MINUTES,
     get_global_update_lock_key
@@ -52,7 +53,9 @@ async def _maybe_trigger_global_update(session_id: str) -> None:
         return
     
     # Check if this artist is already being updated (per-worker deduplication)
-    if artist in _global_update_locks:
+    # Use normalized name for consistency
+    norm_artist = artist.lower()
+    if norm_artist in _global_update_locks:
         logger.debug(f"[GLOBAL] Artist artist='{artist}' already being updated in this worker - skipping")
         return
     
@@ -60,14 +63,21 @@ async def _maybe_trigger_global_update(session_id: str) -> None:
     stats = await supabase_client.get_artist_stats(artist)
     last_update = stats.get("last_global_update_at") if stats else None
     
+    if last_update:
+        seconds_since = get_seconds_since_update(last_update)
+        logger.info(
+            f"[GLOBAL] Time check for '{artist}': {seconds_since/60:.1f}m since last update "
+            f"(Interval: {GLOBAL_UPDATE_INTERVAL_MINUTES}m)"
+        )
+
     # Use shared utility to check if update should be triggered
     # Pass pending_comparisons=1 to indicate there's at least one new comparison
     if not await should_trigger_global_update(artist, last_update, pending_comparisons=1):
         return
     
     # Enqueue the update
-    _global_update_locks.add(artist)
-    task_queue.enqueue(run_global_ranking_update, artist)
+    _global_update_locks.add(norm_artist)
+    leaderboard_queue.enqueue(run_global_ranking_update, artist)
     
     if last_update:
         time_since = get_seconds_since_update(last_update)
@@ -240,6 +250,12 @@ async def process_global_ranking(artist: str) -> None:
     persist_time = (time.time() - persist_start) * 1000
     logger.info(f"[GLOBAL] Database persist took {persist_time:.2f}ms")
     
+    # 7. Invalidate leaderboard cache for this artist
+    # Use lowercase artist name for pattern to match normalized cache keys
+    norm_artist = artist.lower()
+    await cache.delete_pattern(f"leaderboard:{norm_artist}:*")
+    logger.info(f"[GLOBAL] Invalidated leaderboard cache for artist='{artist}' (normalized='{norm_artist}')")
+    
     total_time = (time.time() - start_time) * 1000
     logger.info(f"[GLOBAL] Completed global ranking for artist='{artist}' in {total_time:.2f}ms")
 
@@ -272,8 +288,8 @@ def _cleanup_locks(artist: str) -> None:
     Args:
         artist: The artist name
     """
-    # Remove in-memory lock
-    _global_update_locks.discard(artist)
+    # Remove in-memory lock (use normalized name)
+    _global_update_locks.discard(artist.lower())
     
     # Remove Redis lock
     lock_key = get_global_update_lock_key(artist)

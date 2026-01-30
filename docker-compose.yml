@@ -62,5 +62,18 @@ services:
     deploy:
       replicas: 1  # CRITICAL: Must stay at 1 for rate limiting!
 
+  worker_leaderboard:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python worker.py --queues leaderboard
+    deploy:
+      replicas: 1
+
 volumes:
   redis_data:

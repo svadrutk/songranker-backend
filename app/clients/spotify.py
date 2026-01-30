@@ -157,6 +157,12 @@ class SpotifyClient:
         # Deduplicate and Clean
         return self._process_albums(all_items, artist_name)
 
+    async def search_artists_only(self, query: str, client: Optional[httpx.AsyncClient] = None) -> List[str]:
+        """Search for artist names only (lightweight)."""
+        search_res = await self._get("/search", params={"q": query, "type": "artist", "limit": 5}, client=client)
+        items = search_res.get("artists", {}).get("items", [])
+        return [artist["name"] for artist in items]
+
     def _process_albums(self, albums: List[Dict[str, Any]], artist_name: str) -> List[Dict[str, Any]]:
         """Deduplicate albums (Spotify returns many versions) and format."""
         deduped = {}

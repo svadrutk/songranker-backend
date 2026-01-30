@@ -66,7 +66,8 @@ async def delete_session(session_id: UUID):
         # 3. Trigger immediate global ranking update to remove these votes from the leaderboard
         if artist:
             from app.tasks import run_global_ranking_update
-            task_queue.enqueue(run_global_ranking_update, artist)
+            from app.core.queue import leaderboard_queue
+            leaderboard_queue.enqueue(run_global_ranking_update, artist)
             logger.info(f"Triggered global ranking update for {artist} after session deletion")
 
         return {"status": "success", "message": "Session deleted"}

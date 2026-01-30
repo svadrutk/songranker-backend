@@ -321,7 +321,9 @@ class SupabaseDB:
 
     async def update_global_rankings(self, updates: List[Dict[str, Any]]):
         """
-        Bulk update global rankings for songs.
+        Bulk update global rankings for songs using a dedicated RPC function.
+        This is significantly more efficient than individual updates as it runs
+        in a single database transaction with one API call.
         
         updates: List of dicts with {song_id, global_elo, global_bt_strength, global_votes_count}
         """
@@ -330,16 +332,34 @@ class SupabaseDB:
             
         client = await self.get_client()
         
-        # Update each song individually (Supabase doesn't support bulk update easily)
-        # This is acceptable because global updates happen in background
-        for u in updates:
-            await client.table("songs").update({
-                "global_elo": u["global_elo"],
-                "global_bt_strength": u["global_bt_strength"],
-                "global_votes_count": u.get("global_votes_count", 0)
-            }).eq("id", str(u["song_id"])).execute()
-        
-        logger.info(f"Successfully updated global rankings for {len(updates)} songs")
+        try:
+            # Convert list of dicts to parallel arrays for the RPC call
+            song_ids = [str(u["song_id"]) for u in updates]
+            global_elos = [float(u["global_elo"]) for u in updates]
+            global_bt_strengths = [float(u["global_bt_strength"]) for u in updates]
+            global_votes = [int(u.get("global_votes_count", 0)) for u in updates]
+
+            await client.rpc("bulk_update_song_rankings", {
+                "p_song_ids": song_ids,
+                "p_global_elos": global_elos,
+                "p_global_bt_strengths": global_bt_strengths,
+                "p_global_votes": global_votes
+            }).execute()
+            
+            logger.info(f"Successfully updated global rankings for {len(updates)} songs via RPC")
+        except Exception as e:
+            logger.error(f"Failed to update global rankings via RPC: {e}")
+            # Fallback to sequential updates if RPC fails (e.g. if not yet deployed)
+            logger.info("Falling back to sequential updates...")
+            for u in updates:
+                try:
+                    await client.table("songs").update({
+                        "global_elo": u["global_elo"],
+                        "global_bt_strength": u["global_bt_strength"],
+                        "global_votes_count": u.get("global_votes_count", 0)
+                    }).eq("id", str(u["song_id"])).execute()
+                except Exception as ex:
+                    logger.error(f"Sequential fallback failed for song {u['song_id']}: {ex}")
 
     async def get_artist_stats(self, artist: str) -> Optional[Dict[str, Any]]:
         """Get statistics for an artist including last update timestamp."""

@@ -168,4 +168,38 @@ class HybridCache:
                 logger.warning(f"Background refresh failed for {key}: {e}")
             await self._reject_future(key, e)
 
+    async def delete(self, key: str):
+        """Invalidate a specific cache key."""
+        async with self._lock:
+            self._memory_cache.pop(key, None)
+            
+        redis = get_async_redis()
+        await redis.delete(f"cache:{key}")
+        logger.info(f"Invalidated cache key: {key}")
+
+    async def delete_pattern(self, pattern: str):
+        """
+        Invalidate keys matching a pattern.
+        Note: pattern should not include 'cache:' prefix.
+        """
+        # Memory cache invalidation
+        async with self._lock:
+            import fnmatch
+            keys_to_del = [k for k in self._memory_cache.keys() if fnmatch.fnmatch(k, pattern)]
+            for k in keys_to_del:
+                self._memory_cache.pop(k, None)
+        
+        # Redis invalidation
+        redis = get_async_redis()
+        cursor = 0
+        redis_pattern = f"cache:{pattern}"
+        while True:
+            cursor, keys = await redis.scan(cursor, match=redis_pattern, count=100)
+            if keys:
+                await redis.delete(*keys)
+            if cursor == 0:
+                break
+        
+        logger.info(f"Invalidated cache pattern: {pattern}")
+
 cache = HybridCache()

@@ -39,8 +39,8 @@ class LeaderboardResponse(BaseModel):
     """Response for the global leaderboard."""
     artist: str
     songs: List[LeaderboardSong]
-    total_comparisons: int
-    pending_comparisons: int = 0  # Default to 0 for backward compatibility with old cache
+    total_comparisons: int  # Number of comparisons already processed into global Elo
+    pending_comparisons: int = 0  # Number of comparisons waiting for next global update
     last_updated: Optional[str] = None
 
 
@@ -104,8 +104,11 @@ async def get_global_leaderboard(
     """
     logger.info(f"[API] GET /leaderboard/{artist} limit={limit}")
     
-    # Cache the leaderboard for 2 minutes to handle traffic bursts
-    cache_key = f"leaderboard:{artist}:{limit}"
+    # Cache the leaderboard for 2 minutes (TTL matches README documentation)
+    # Lower TTL reduces impact of cross-worker memory cache desync
+    # It will also be invalidated immediately when a global ranking update completes
+    norm_artist = artist.lower()
+    cache_key = f"leaderboard:{norm_artist}:{limit}"
     result = await cache.get_or_fetch(
         cache_key,
         lambda: fetch_leaderboard_data(artist, limit),
@@ -161,7 +164,7 @@ def _enqueue_global_update(
         background_tasks: FastAPI background tasks
         result: Leaderboard result dict containing pending comparisons and last_updated
     """
-    from app.core.queue import task_queue
+    from app.core.queue import leaderboard_queue
     from app.tasks import run_global_ranking_update
     
     pending = result.get("pending_comparisons", 0)
@@ -169,7 +172,7 @@ def _enqueue_global_update(
     
     # Enqueue the task using background_tasks.add_task with proper function reference
     background_tasks.add_task(
-        task_queue.enqueue,
+        leaderboard_queue.enqueue,
         run_global_ranking_update,
         artist
     )

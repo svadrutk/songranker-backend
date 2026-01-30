@@ -29,7 +29,8 @@ COPY . .
 EXPOSE 8000
 
 # Run the application
-# We run the web server and both background workers in the same container for simplicity on Railway
+# We run the web server and all background workers in the same container for simplicity on Railway
 # worker_default: handles ranking/deduplication (can be multiple)
 # worker_spotify: handles Spotify API calls (MUST be exactly 1 for rate limiting)
-CMD sh -c "python worker.py --queues default & python worker.py --queues spotify & gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120 --keep-alive 5"
+# worker_leaderboard: handles heavy global ranking calculations
+CMD sh -c "python worker.py --queues default & python worker.py --queues spotify & python worker.py --queues leaderboard & gunicorn app.main:app --workers 4 --timeout 120 --keep-alive 5"

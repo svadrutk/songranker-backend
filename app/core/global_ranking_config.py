@@ -13,4 +13,6 @@ GLOBAL_UPDATE_LOCK_KEY_FORMAT = "global_update_lock:{artist}"
 
 def get_global_update_lock_key(artist: str) -> str:
     """Get Redis lock key for a specific artist's global update."""
-    return GLOBAL_UPDATE_LOCK_KEY_FORMAT.format(artist=artist)
+    # Normalize artist name for the lock key to prevent duplicate updates 
+    # for variations like "Demi Lovato" and "demi lovato"
+    return GLOBAL_UPDATE_LOCK_KEY_FORMAT.format(artist=artist.lower())
