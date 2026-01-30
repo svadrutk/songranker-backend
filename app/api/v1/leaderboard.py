@@ -99,24 +99,13 @@ async def get_global_leaderboard(
     - **artist**: The artist name (must match exactly as stored in the database)
     - **limit**: Maximum number of songs to return (default: 100, max: 500)
     
-    If there are pending comparisons and the ranking hasn't updated in 10+ minutes,
+    If there are pending comparisons and the ranking hasn't updated in the required interval,
     this endpoint will trigger a background global ranking update.
     """
     logger.info(f"[API] GET /leaderboard/{artist} limit={limit}")
     
-    # Cache the leaderboard for 2 minutes (TTL matches README documentation)
-    # Lower TTL reduces impact of cross-worker memory cache desync
-    # memory_ttl_seconds=5 ensures the API worker checks Redis frequently
-    norm_artist = artist.lower()
-    cache_key = f"leaderboard:{norm_artist}:{limit}"
-    result, metadata = await cache.get_or_fetch(
-        cache_key,
-        lambda: fetch_leaderboard_data(artist, limit),
-        ttl_seconds=120,
-        background_tasks=background_tasks,
-        return_metadata=True,
-        memory_ttl_seconds=5
-    )
+    # Fetch directly from DB to avoid cache confusion
+    result = await fetch_leaderboard_data(artist, limit)
     
     if result is None:
         raise HTTPException(
@@ -125,11 +114,10 @@ async def get_global_leaderboard(
         )
     
     # Trigger global update if needed (pending comparisons + stale data)
-    # Trigger even if metadata says is_stale=True, because the background revalidation
-    # of the cache only refreshes the VIEW, it doesn't trigger the WORKER to process votes.
     await _maybe_trigger_update_on_view(artist, result, background_tasks)
     
     return result
+
 
 async def _try_acquire_update_lock(artist: str) -> bool:
     """
@@ -244,39 +232,26 @@ async def get_artist_leaderboard_stats(request: Request, artist: str) -> Dict[st
     Get statistics about an artist's global leaderboard.
     Returns metadata without the full song list (lighter weight than full leaderboard).
     """
-    async def fetch_stats():
-        stats, total_comparisons = await asyncio.gather(
-            supabase_client.get_artist_stats(artist),
-            supabase_client.get_artist_total_comparisons(artist)
-        )
-        
-        if not stats:
-            return None
-        
-        # Calculate pending comparisons
-        processed_comparisons, pending_comparisons = calculate_pending_comparisons(
-            total_comparisons, stats
-        )
-        
-        return {
-            "artist": artist,
-            "total_comparisons": processed_comparisons,
-            "pending_comparisons": pending_comparisons,
-            "last_updated": stats.get("last_global_update_at"),
-            "created_at": stats.get("created_at")
-        }
-    
-    result = await cache.get_or_fetch(
-        f"leaderboard_stats:{artist.lower()}",
-        fetch_stats,
-        ttl_seconds=60,
-        memory_ttl_seconds=5
+    stats, total_comparisons = await asyncio.gather(
+        supabase_client.get_artist_stats(artist),
+        supabase_client.get_artist_total_comparisons(artist)
     )
     
-    if result is None:
+    if not stats:
         raise HTTPException(
             status_code=404,
             detail=f"No statistics found for artist: {artist}"
         )
     
-    return result
+    # Calculate pending comparisons
+    processed_comparisons, pending_comparisons = calculate_pending_comparisons(
+        total_comparisons, stats
+    )
+    
+    return {
+        "artist": artist,
+        "total_comparisons": processed_comparisons,
+        "pending_comparisons": pending_comparisons,
+        "last_updated": stats.get("last_global_update_at"),
+        "created_at": stats.get("created_at")
+    }

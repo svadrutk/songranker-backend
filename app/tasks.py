@@ -250,12 +250,6 @@ async def process_global_ranking(artist: str) -> None:
     persist_time = (time.time() - persist_start) * 1000
     logger.info(f"[GLOBAL] Database persist took {persist_time:.2f}ms")
     
-    # 7. Invalidate leaderboard cache for this artist
-    # Use lowercase artist name for pattern to match normalized cache keys
-    norm_artist = artist.lower()
-    await cache.delete_pattern(f"leaderboard:{norm_artist}:*")
-    logger.info(f"[GLOBAL] Invalidated leaderboard cache for artist='{artist}' (normalized='{norm_artist}')")
-    
     total_time = (time.time() - start_time) * 1000
     logger.info(f"[GLOBAL] Completed global ranking for artist='{artist}' in {total_time:.2f}ms")
 
