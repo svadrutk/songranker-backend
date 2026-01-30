@@ -394,10 +394,11 @@ class SupabaseDB:
 
     async def upsert_artist_stats(self, artist: str, comparison_count: int):
         """Update or insert artist statistics."""
+        from datetime import datetime, timezone
         client = await self.get_client()
         await client.table("artist_stats").upsert({
             "artist": artist,
-            "last_global_update_at": "now()",
+            "last_global_update_at": datetime.now(timezone.utc).isoformat(),
             "total_comparisons_count": comparison_count
         }, on_conflict="artist").execute()
         

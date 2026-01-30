@@ -1,11 +1,11 @@
 """Configuration constants for global ranking system."""
 
 # How often global rankings update (minutes)
-GLOBAL_UPDATE_INTERVAL_MINUTES = 10
+GLOBAL_UPDATE_INTERVAL_MINUTES = 2
 
 # Redis lock expiry time (seconds)
 # Should be longer than max expected update duration
-REDIS_LOCK_EXPIRY_SECONDS = 300  # 5 minutes
+REDIS_LOCK_EXPIRY_SECONDS = 120  # 2 minutes (cooldown)
 
 # Lock key format
 GLOBAL_UPDATE_LOCK_KEY_FORMAT = "global_update_lock:{artist}"

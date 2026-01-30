@@ -41,13 +41,19 @@ class HybridCache:
         ttl_seconds: int = 3600,
         swr_ttl_seconds: int = 86400, # 24 hours
         background_tasks: Optional[BackgroundTasks] = None,
-        negative_ttl_seconds: int = 300 # 5 minutes for None results
+        negative_ttl_seconds: int = 300, # 5 minutes for None results
+        return_metadata: bool = False,
+        memory_ttl_seconds: Optional[int] = None
     ) -> Any:
         """
         Get data from cache (Memory -> Redis) or fetch from source.
         Supports Stale-While-Revalidate, Request Coalescing, and Bounded LRU.
+        
+        If return_metadata is True, returns (data, metadata_dict)
+        If memory_ttl_seconds is provided, the memory cache will expire sooner than Redis.
         """
         now = datetime.now(timezone.utc)
+        metadata = {"is_hit": False, "is_stale": False}
 
         # 1. Fast Path: Memory Hit
         if key in self._memory_cache:
@@ -56,7 +62,8 @@ class HybridCache:
             
             if now < expires_at:
                 logger.debug(f"Memory hit: {key}")
-                return data
+                metadata["is_hit"] = True
+                return (data, metadata) if return_metadata else data
             
             # SWR: Return stale and refresh in background if not already in flight
             if background_tasks and now < (expires_at + timedelta(seconds=swr_ttl_seconds)):
@@ -64,7 +71,10 @@ class HybridCache:
                     if key not in self._in_flight:
                         logger.info(f"Memory SWR trigger: {key}")
                         background_tasks.add_task(self._refresh_cache, key, fetcher, ttl_seconds, swr_ttl_seconds)
-                return data
+                
+                metadata["is_hit"] = True
+                metadata["is_stale"] = True
+                return (data, metadata) if return_metadata else data
 
         # 2. Coalescing: Protect both Redis and Source Fetch
         async with self._lock:
@@ -77,7 +87,9 @@ class HybridCache:
                 self._in_flight[key] = asyncio.get_event_loop().create_future()
         
         if future:
-            return await future
+            data = await future
+            metadata["is_hit"] = True
+            return (data, metadata) if return_metadata else data
 
         try:
             # 3. Check Redis
@@ -89,7 +101,13 @@ class HybridCache:
                 
                 if expires_at_str:
                     expires_at = datetime.fromisoformat(expires_at_str)
-                    self._update_memory(key, data, expires_at)
+                    
+                    # If memory_ttl is set, cap the memory expiration
+                    mem_expires_at = expires_at
+                    if memory_ttl_seconds:
+                        mem_expires_at = min(expires_at, now + timedelta(seconds=memory_ttl_seconds))
+                    
+                    self._update_memory(key, data, mem_expires_at)
                     
                     is_expired = now >= expires_at
                     within_swr = background_tasks and now < (expires_at + timedelta(seconds=swr_ttl_seconds))
@@ -101,7 +119,9 @@ class HybridCache:
                         
                         logger.info(f"Redis hit: {key}")
                         await self._resolve_future(key, data)
-                        return data
+                        metadata["is_hit"] = True
+                        metadata["is_stale"] = is_expired
+                        return (data, metadata) if return_metadata else data
 
             # 4. Fetch from source
             logger.info(f"Fetching from source: {key}")
@@ -111,9 +131,18 @@ class HybridCache:
             actual_ttl = ttl_seconds if data is not None else negative_ttl_seconds
             expires_at = now + timedelta(seconds=actual_ttl)
             
+            # Memory expiration (possibly capped)
+            mem_expires_at = expires_at
+            if memory_ttl_seconds:
+                mem_expires_at = min(expires_at, now + timedelta(seconds=memory_ttl_seconds))
+
             await self._update_cache_stores(key, data, expires_at, actual_ttl, swr_ttl_seconds)
+            # Override memory expiration if we have a custom memory TTL
+            if memory_ttl_seconds:
+                self._update_memory(key, data, mem_expires_at)
+                
             await self._resolve_future(key, data)
-            return data
+            return (data, metadata) if return_metadata else data
 
         except BaseException as e:
             logger.error(f"Error in get_or_fetch for {key}: {e}")

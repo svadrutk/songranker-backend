@@ -309,9 +309,15 @@ def run_global_ranking_update(artist: str) -> None:
         _run_async_task(process_global_ranking(artist))
     except Exception as e:
         logger.error(f"[WORKER] Failed global ranking for artist='{artist}': {e}")
+        # Only cleanup locks on failure so we can retry
+        # On success, we let the Redis lock expire naturally to provide a cooldown
+        _cleanup_locks(artist)
         raise
     finally:
-        _cleanup_locks(artist)
+        # Remove only the in-memory lock for this worker process
+        # This allows other tasks to be enqueued in this worker, but they will
+        # still be blocked by the Redis lock in the API layer.
+        _global_update_locks.discard(artist.lower())
 
 def run_spotify_method(method_name: str, **kwargs) -> Any:
     """
