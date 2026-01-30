@@ -44,6 +44,21 @@ class LeaderboardResponse(BaseModel):
     last_updated: Optional[str] = None
 
 
+def _map_leaderboard_song(song_data: Dict[str, Any], index: int) -> Dict[str, Any]:
+    """Map database song fields to API response model fields."""
+    return {
+        "id": str(song_data["id"]),
+        "name": song_data["name"],
+        "artist": song_data["artist"],
+        "album": song_data.get("album"),
+        "album_art_url": song_data.get("cover_url"), # Map cover_url to album_art_url
+        "global_elo": song_data["global_elo"],
+        "global_bt_strength": song_data["global_bt_strength"],
+        "global_votes_count": song_data["global_votes_count"],
+        "rank": index + 1
+    }
+
+
 async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[Dict[str, Any]]:
     """Fetch leaderboard and artist stats, then build response as a dict for caching."""
     songs_data, stats, total_comparisons = await asyncio.gather(
@@ -61,20 +76,7 @@ async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[Dict[str, 
     if not songs_data and total_comparisons == 0:
         return None
     
-    songs = [
-        {
-            "id": str(s["id"]),
-            "name": s["name"],
-            "artist": s["artist"],
-            "album": s.get("album"),
-            "album_art_url": s.get("cover_url"),  # Map cover_url to album_art_url for API response
-            "global_elo": s["global_elo"],
-            "global_bt_strength": s["global_bt_strength"],
-            "global_votes_count": s["global_votes_count"],
-            "rank": idx + 1
-        }
-        for idx, s in enumerate(songs_data)
-    ]
+    songs = [_map_leaderboard_song(s, idx) for idx, s in enumerate(songs_data)]
     
     return {
         "artist": artist,

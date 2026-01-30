@@ -133,30 +133,32 @@ class SupabaseDB:
                 .eq("session_id", str(session_id)) \
                 .execute()
             
-            if not res.data or not isinstance(res.data, list):
+            if not res.data:
                 return []
             
             results = []
-            for item in res.data:
-                if not isinstance(item, dict):
+            for item_raw in res.data:
+                if not isinstance(item_raw, dict):
+                    continue
+                item = cast(Dict[str, Any], item_raw)
+                # session_songs join returns 'songs' key with global details
+                details_raw = item.get("songs")
+                if not details_raw:
                     continue
                 
-                songs_data = item.get("songs")
-                if not songs_data:
+                # Handle both object and list return formats from Supabase
+                details_item = details_raw[0] if isinstance(details_raw, list) else details_raw
+                if not isinstance(details_item, dict):
                     continue
-                
-                details = songs_data[0] if isinstance(songs_data, list) else songs_data
-                if not isinstance(details, dict):
-                    continue
+                details = cast(Dict[str, Any], details_item)
                 
                 # Merge session-specific stats with global song details
-                song_info = {
+                results.append({
                     "song_id": str(item.get("song_id", "")),
                     "local_elo": item.get("local_elo", 1500.0),
                     "bt_strength": item.get("bt_strength"),
-                }
-                song_info.update({k: v for k, v in details.items() if k != "id"})
-                results.append(song_info)
+                    **{k: v for k, v in details.items() if k != "id"}
+                })
 
             return results
         except Exception as e:
@@ -307,7 +309,7 @@ class SupabaseDB:
         """Get all songs for a specific artist with their global stats."""
         client = await self.get_client()
         response = await client.rpc("get_artist_songs", {
-            "p_artist": artist
+            "p_artist": artist.lower()
         }).execute()
         return cast(List[Dict[str, Any]], response.data or [])
 
@@ -315,7 +317,7 @@ class SupabaseDB:
         """Get all comparisons for songs by a specific artist across all sessions."""
         client = await self.get_client()
         response = await client.rpc("get_artist_comparisons", {
-            "p_artist": artist
+            "p_artist": artist.lower()
         }).execute()
         return cast(List[Dict[str, Any]], response.data or [])
 
@@ -366,7 +368,7 @@ class SupabaseDB:
         client = await self.get_client()
         response = await client.table("artist_stats") \
             .select("*") \
-            .eq("artist", artist) \
+            .eq("artist", artist.lower()) \
             .limit(1) \
             .execute()
         
@@ -378,28 +380,32 @@ class SupabaseDB:
         """Get the total number of comparisons made for an artist."""
         client = await self.get_client()
         response = await client.rpc("count_artist_comparisons", {
-            "p_artist": artist
+            "p_artist": artist.lower()
         }).execute()
-        return int(response.data or 0)
+        
+        # response.data will contain the single BIGINT result
+        # We cast to Any then int to satisfy the LSP
+        return int(cast(Any, response.data)) if response.data is not None else 0
 
     async def upsert_artist_stats(self, artist: str, comparison_count: int):
         """Update or insert artist statistics."""
         from datetime import datetime, timezone
         client = await self.get_client()
+        artist_norm = artist.lower()
         await client.table("artist_stats").upsert({
-            "artist": artist,
+            "artist": artist_norm,
             "last_global_update_at": datetime.now(timezone.utc).isoformat(),
             "total_comparisons_count": comparison_count
         }, on_conflict="artist").execute()
         
-        logger.info(f"Updated artist stats for {artist}: {comparison_count} comparisons")
+        logger.info(f"Updated artist stats for {artist_norm}: {comparison_count} comparisons")
 
     async def get_leaderboard(self, artist: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Get the global leaderboard for an artist."""
         client = await self.get_client()
         response = await client.table("songs") \
             .select("id, name, artist, album, cover_url, global_elo, global_bt_strength, global_votes_count") \
-            .eq("artist", artist) \
+            .eq("artist", artist.lower()) \
             .gt("global_votes_count", 0) \
             .order("global_elo", desc=True) \
             .limit(limit) \

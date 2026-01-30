@@ -88,14 +88,18 @@ async def _maybe_trigger_global_update(session_id: str) -> None:
     else:
         logger.info(f"[GLOBAL] Enqueued global ranking update for artist='{artist}' (first update)")
 
+def _worker_wrapper(coro, task_name: str, identifier: str) -> Any:
+    """Generic wrapper for background worker tasks."""
+    logger.info(f"[WORKER] Starting {task_name} for {identifier}")
+    try:
+        return _run_async_task(coro)
+    except Exception as e:
+        logger.error(f"[WORKER] Failed {task_name} for {identifier}: {e}")
+        raise
+
 def run_deep_deduplication(session_id: str) -> None:
     """Synchronous wrapper for deduplication task."""
-    logger.info(f"[WORKER] Processing deduplication for session_id={session_id}")
-    try:
-        _run_async_task(deep_deduplicate_session(session_id))
-    except Exception as e:
-        logger.error(f"[WORKER] Failed deduplication for session_id={session_id}: {e}")
-        raise
+    _worker_wrapper(deep_deduplicate_session(session_id), "deduplication", f"session_id={session_id}")
 
 async def process_ranking_update(session_id: str) -> None:
     """Compute and persist session-level Bradley-Terry rankings."""
@@ -162,12 +166,7 @@ async def process_ranking_update(session_id: str) -> None:
 
 def run_ranking_update(session_id: str) -> None:
     """Synchronous wrapper for ranking update task."""
-    logger.info(f"[WORKER] Processing ranking update for session_id={session_id}")
-    try:
-        _run_async_task(process_ranking_update(session_id))
-    except Exception as e:
-        logger.error(f"[WORKER] Failed ranking update for session_id={session_id}: {e}")
-        raise
+    _worker_wrapper(process_ranking_update(session_id), "ranking update", f"session_id={session_id}")
 
 async def process_global_ranking(artist: str) -> None:
     """
@@ -320,15 +319,11 @@ def run_spotify_method(method_name: str, **kwargs) -> Any:
     providing natural rate limiting across all Gunicorn instances.
     """
     from app.clients.spotify import spotify_client
-    logger.info(f"[SPOTIFY WORKER] Executing method: {method_name} with args: {kwargs}")
     
-    try:
+    async def _execute():
         method = getattr(spotify_client, method_name)
         # Remove 'client' from kwargs if it exists because the worker uses its own client
         kwargs.pop('client', None)
-        result = _run_async_task(method(**kwargs))
-        logger.info(f"[SPOTIFY WORKER] Successfully completed: {method_name}")
-        return result
-    except Exception as e:
-        logger.error(f"[SPOTIFY WORKER] Failed to execute {method_name}: {e}")
-        raise
+        return await method(**kwargs)
+
+    return _worker_wrapper(_execute(), f"Spotify:{method_name}", str(kwargs.get('query') or kwargs.get('release_group_id') or 'args'))
