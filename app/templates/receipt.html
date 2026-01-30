@@ -125,10 +125,34 @@
         .song-info-container {
             display: flex;
             align-items: center;
-            gap: 24px; /* gap-6 */
+            gap: 40px; /* Increased from 24px for more breathing room */
             flex: 1;
             min-width: 0;
             padding-right: 32px; /* pr-8 */
+        }
+
+        .album-art {
+            width: 100px; /* Increased from 80px for better hierarchy */
+            height: 100px;
+            flex-shrink: 0;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            overflow: hidden;
+            background-color: rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .rank-number {
+            font-size: 48px;
+            font-weight: 900;
+            opacity: 1;
+            width: 70px; /* Increased from 60px to give numbers more room */
+            flex-shrink: 0;
+            font-family: 'Geist Mono', monospace;
+            text-align: right;
+            line-height: 1;
+            letter-spacing: -0.05em;
         }
 
         .album-art {
@@ -156,19 +180,33 @@
 
         .song-details {
             display: flex;
-            align-items: flex-start;
-            gap: 16px; /* gap-4 */
+            align-items: center; /* Changed from flex-start to center for better vertical alignment */
+            gap: 20px; /* Increased gap for better spacing */
             min-width: 0;
             flex: 1;
         }
 
         .rank-number {
-            font-size: 36px; /* text-4xl */
+            font-size: 48px; /* Larger and bolder */
             font-weight: 900;
-            opacity: 0.2;
-            width: 48px; /* w-12 */
+            opacity: 1;
+            width: 60px; /* Increased slightly to handle double digits better */
             flex-shrink: 0;
-            font-family: 'Geist', sans-serif;
+            font-family: 'Geist Mono', monospace;
+            text-align: right; /* Changed back to right to fix the '10' alignment bug */
+            line-height: 1; /* Ensure consistent line height */
+        }
+        
+        .rank-number.gold {
+            color: #eab308; /* text-yellow-500 */
+        }
+        
+        .rank-number.silver {
+            color: #9ca3af; /* text-gray-400 */
+        }
+        
+        .rank-number.bronze {
+            color: #fb923c; /* text-orange-400 */
         }
 
         .text-content {
@@ -276,6 +314,7 @@
                 {% for song in songs %}
                 <div class="song-item">
                     <div class="song-info-container">
+                        <span class="rank-number {% if loop.index == 1 %}gold{% elif loop.index == 2 %}silver{% elif loop.index == 3 %}bronze{% endif %}">{{ loop.index }}</span>
                         <div class="album-art">
                             {% if song.cover_url %}
                             <img src="{{ song.cover_url }}" alt="{{ song.name }}">
@@ -284,7 +323,6 @@
                             {% endif %}
                         </div>
                         <div class="song-details">
-                            <span class="rank-number">{{ loop.index }}</span>
                             <div class="text-content">
                                 <p class="song-name">{{ song.name }}</p>
                                 <p class="artist-name">{{ song.artist }}</p>
