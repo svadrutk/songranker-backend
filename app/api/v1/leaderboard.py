@@ -240,15 +240,6 @@ async def _maybe_trigger_update_on_view(
         )
 
 
-    # Use short memory TTL (5s) to ensure fresh stats from Redis
-    cache_key = f"leaderboard_stats:{artist.lower()}"
-    return await cache.get_or_fetch(
-        cache_key,
-        fetch_stats,
-        ttl_seconds=60,
-        memory_ttl_seconds=5
-    )
-
 @router.get("/leaderboard/{artist}/stats")
 @limiter.limit("60/minute")
 async def get_artist_leaderboard_stats(request: Request, artist: str) -> Dict[str, Any]:
