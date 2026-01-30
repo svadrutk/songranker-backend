@@ -61,30 +61,37 @@ def _map_leaderboard_song(song_data: Dict[str, Any], index: int) -> Dict[str, An
 
 async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[Dict[str, Any]]:
     """Fetch leaderboard and artist stats, then build response as a dict for caching."""
-    songs_data, stats, total_comparisons = await asyncio.gather(
-        supabase_client.get_leaderboard(artist, limit),
-        supabase_client.get_artist_stats(artist),
-        supabase_client.get_artist_total_comparisons(artist)
-    )
-    
-    # Calculate pending comparisons (total - processed)
-    processed_comparisons, pending_comparisons = calculate_pending_comparisons(
-        total_comparisons, stats
-    )
-    
-    # If no songs are ranked AND there are zero comparisons total, then the artist is truly empty
-    if not songs_data and total_comparisons == 0:
-        return None
-    
-    songs = [_map_leaderboard_song(s, idx) for idx, s in enumerate(songs_data)]
-    
-    return {
-        "artist": artist,
-        "songs": songs,
-        "total_comparisons": processed_comparisons,
-        "pending_comparisons": pending_comparisons,
-        "last_updated": stats.get("last_global_update_at") if stats else None
-    }
+    try:
+        songs_data, stats, total_comparisons = await asyncio.gather(
+            supabase_client.get_leaderboard(artist, limit),
+            supabase_client.get_artist_stats(artist),
+            supabase_client.get_artist_total_comparisons(artist)
+        )
+        
+        # Calculate pending comparisons (total - processed)
+        processed_comparisons, pending_comparisons = calculate_pending_comparisons(
+            total_comparisons, stats
+        )
+        
+        logger.info(f"[API] Leaderboard for '{artist}': songs={len(songs_data) if songs_data else 0}, processed={processed_comparisons}, pending={pending_comparisons}")
+        
+        # If no songs are ranked AND there are zero comparisons total, then the artist is truly empty
+        if not songs_data and total_comparisons == 0:
+            logger.warning(f"[API] No ranking data found for artist '{artist}' (songs=0, total_comp=0)")
+            return None
+        
+        songs = [_map_leaderboard_song(s, idx) for idx, s in enumerate(songs_data)]
+        
+        return {
+            "artist": artist,
+            "songs": songs,
+            "total_comparisons": processed_comparisons,
+            "pending_comparisons": pending_comparisons,
+            "last_updated": stats.get("last_global_update_at") if stats else None
+        }
+    except Exception as e:
+        logger.error(f"[API] Error fetching leaderboard data for '{artist}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error fetching leaderboard: {e}")
 
 
 @router.get("/leaderboard/{artist}", response_model=LeaderboardResponse)

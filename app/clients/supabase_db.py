@@ -1,6 +1,7 @@
 import asyncio
 from typing import Dict, Any, Optional, cast, List
 import logging
+from datetime import datetime, timezone
 from supabase import create_async_client, AsyncClient
 from postgrest.types import CountMethod
 from app.core.config import settings
@@ -309,7 +310,7 @@ class SupabaseDB:
         """Get all songs for a specific artist with their global stats."""
         client = await self.get_client()
         response = await client.rpc("get_artist_songs", {
-            "p_artist": artist.lower()
+            "p_artist": artist
         }).execute()
         return cast(List[Dict[str, Any]], response.data or [])
 
@@ -317,7 +318,7 @@ class SupabaseDB:
         """Get all comparisons for songs by a specific artist across all sessions."""
         client = await self.get_client()
         response = await client.rpc("get_artist_comparisons", {
-            "p_artist": artist.lower()
+            "p_artist": artist
         }).execute()
         return cast(List[Dict[str, Any]], response.data or [])
 
@@ -368,7 +369,7 @@ class SupabaseDB:
         client = await self.get_client()
         response = await client.table("artist_stats") \
             .select("*") \
-            .eq("artist", artist.lower()) \
+            .eq("artist", artist) \
             .limit(1) \
             .execute()
         
@@ -379,33 +380,41 @@ class SupabaseDB:
     async def get_artist_total_comparisons(self, artist: str) -> int:
         """Get the total number of comparisons made for an artist."""
         client = await self.get_client()
-        response = await client.rpc("count_artist_comparisons", {
-            "p_artist": artist.lower()
-        }).execute()
-        
-        # response.data will contain the single BIGINT result
-        # We cast to Any then int to satisfy the LSP
-        return int(cast(Any, response.data)) if response.data is not None else 0
+        try:
+            response = await client.rpc("count_artist_comparisons", {
+                "p_artist": artist
+            }).execute()
+            
+            if response.data is not None:
+                return int(cast(Any, response.data))
+        except Exception as e:
+            logger.warning(f"RPC count_artist_comparisons failed, falling back to full fetch: {e}")
+            
+        # Fallback to fetching all comparisons and counting in Python
+        try:
+            comparisons = await self.get_artist_comparisons(artist)
+            return len(comparisons)
+        except Exception as e:
+            logger.error(f"Fallback counting failed for artist {artist}: {e}")
+            return 0
 
     async def upsert_artist_stats(self, artist: str, comparison_count: int):
         """Update or insert artist statistics."""
-        from datetime import datetime, timezone
         client = await self.get_client()
-        artist_norm = artist.lower()
         await client.table("artist_stats").upsert({
-            "artist": artist_norm,
+            "artist": artist,
             "last_global_update_at": datetime.now(timezone.utc).isoformat(),
             "total_comparisons_count": comparison_count
         }, on_conflict="artist").execute()
         
-        logger.info(f"Updated artist stats for {artist_norm}: {comparison_count} comparisons")
+        logger.info(f"Updated artist stats for {artist}: {comparison_count} comparisons")
 
     async def get_leaderboard(self, artist: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Get the global leaderboard for an artist."""
         client = await self.get_client()
         response = await client.table("songs") \
             .select("id, name, artist, album, cover_url, global_elo, global_bt_strength, global_votes_count") \
-            .eq("artist", artist.lower()) \
+            .eq("artist", artist) \
             .gt("global_votes_count", 0) \
             .order("global_elo", desc=True) \
             .limit(limit) \
