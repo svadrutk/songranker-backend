@@ -52,7 +52,13 @@ async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[Dict[str, 
         supabase_client.get_artist_total_comparisons(artist)
     )
     
-    if not songs_data:
+    # Calculate pending comparisons (total - processed)
+    processed_comparisons, pending_comparisons = calculate_pending_comparisons(
+        total_comparisons, stats
+    )
+    
+    # If no songs are ranked AND there are zero comparisons total, then the artist is truly empty
+    if not songs_data and total_comparisons == 0:
         return None
     
     songs = [
@@ -69,11 +75,6 @@ async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[Dict[str, 
         }
         for idx, s in enumerate(songs_data)
     ]
-    
-    # Calculate pending comparisons (total - processed)
-    processed_comparisons, pending_comparisons = calculate_pending_comparisons(
-        total_comparisons, stats
-    )
     
     return {
         "artist": artist,
@@ -237,18 +238,12 @@ async def get_artist_leaderboard_stats(request: Request, artist: str) -> Dict[st
         supabase_client.get_artist_total_comparisons(artist)
     )
     
-    if not stats:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No statistics found for artist: {artist}"
-        )
-    
     # Calculate pending comparisons
     processed_comparisons, pending_comparisons = calculate_pending_comparisons(
         total_comparisons, stats
     )
     
-    if processed_comparisons == 0 and pending_comparisons == 0:
+    if total_comparisons == 0:
         raise HTTPException(
             status_code=404,
             detail=f"No ranking data found for artist: {artist}"
@@ -258,6 +253,6 @@ async def get_artist_leaderboard_stats(request: Request, artist: str) -> Dict[st
         "artist": artist,
         "total_comparisons": processed_comparisons,
         "pending_comparisons": pending_comparisons,
-        "last_updated": stats.get("last_global_update_at"),
-        "created_at": stats.get("created_at")
+        "last_updated": stats.get("last_global_update_at") if stats else None,
+        "created_at": stats.get("created_at") if stats else None
     }

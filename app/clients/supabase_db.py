@@ -375,22 +375,12 @@ class SupabaseDB:
         return None
 
     async def get_artist_total_comparisons(self, artist: str) -> int:
-        """
-        Get the total number of comparisons for an artist across all sessions.
-        This includes both processed (in global rankings) and pending comparisons.
-        
-        Note: This currently fetches all comparison data just to count them.
-        For better performance with popular artists, consider creating a dedicated
-        database function 'get_artist_comparisons_count(p_artist)' that returns
-        just the count.
-        """
+        """Get the total number of comparisons made for an artist."""
         client = await self.get_client()
-        response = await client.rpc("get_artist_comparisons", {
+        response = await client.rpc("count_artist_comparisons", {
             "p_artist": artist
         }).execute()
-        
-        comparisons = cast(List[Dict[str, Any]], response.data or [])
-        return len(comparisons)
+        return int(response.data or 0)
 
     async def upsert_artist_stats(self, artist: str, comparison_count: int):
         """Update or insert artist statistics."""

@@ -109,7 +109,27 @@ BEGIN
 END;
 $$;
 
--- 8. Comment documentation
+-- 8. RPC function to count comparisons for a specific artist (efficient)
+CREATE OR REPLACE FUNCTION count_artist_comparisons(p_artist TEXT)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_count
+    FROM comparisons c
+    INNER JOIN songs sa ON c.song_a_id = sa.id
+    INNER JOIN songs sb ON c.song_b_id = sb.id
+    WHERE sa.artist = p_artist 
+      AND sb.artist = p_artist;
+      
+    RETURN v_count;
+END;
+$$;
+
+-- 9. Comment documentation
 COMMENT ON COLUMN songs.global_elo IS 'Platform-wide Elo rating computed from all user sessions';
 COMMENT ON COLUMN songs.global_bt_strength IS 'Bradley-Terry strength parameter used in global ranking calculations';
 COMMENT ON COLUMN songs.global_votes_count IS 'Total number of comparisons this song has participated in globally';
