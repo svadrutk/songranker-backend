@@ -6,7 +6,7 @@ from app.schemas.session import SessionCreate, SessionResponse, SessionSong, Com
 from app.clients.supabase_db import supabase_client
 from app.core.utils import normalize_title, calculate_elo
 from app.core.queue import task_queue
-from app.tasks import run_deep_deduplication, run_ranking_update
+from app.tasks import run_deep_deduplication
 from app.core.limiter import limiter
 from uuid import UUID
 

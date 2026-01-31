@@ -14,8 +14,8 @@ logging.basicConfig(
     stream=sys.stdout
 )
 
-from rq import Worker
-from app.core.queue import sync_redis_conn
+from rq import Worker  # noqa: E402
+from app.core.queue import sync_redis_conn  # noqa: E402
 
 # This script starts an RQ worker
 # It can listen to different queues based on command-line arguments

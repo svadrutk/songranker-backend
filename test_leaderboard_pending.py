@@ -5,7 +5,7 @@ Run with: uv run python test_leaderboard_pending.py [artist_name]
 """
 import asyncio
 import sys
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from app.api.v1.leaderboard import fetch_leaderboard_data
 
@@ -21,7 +21,7 @@ def _print_result_summary(result: Dict[str, Any]) -> None:
     """Print the test result summary."""
     pending = result['pending_comparisons']
     
-    print(f"\n✓ Leaderboard data retrieved:")
+    print("\n✓ Leaderboard data retrieved:")
     print(f"  - Processed comparisons: {result['total_comparisons']}")
     print(f"  - Pending comparisons:   {pending}")
     print(f"  - Last updated:          {result['last_updated']}")
