@@ -1,7 +1,7 @@
 """Utility functions for global ranking system."""
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from app.core.global_ranking_config import GLOBAL_UPDATE_INTERVAL_MINUTES

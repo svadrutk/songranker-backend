@@ -5,7 +5,7 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.utils import normalize_title, DELUXE_KEYWORDS, SKIP_KEYWORDS, get_type_priority
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 class SpotifyClient:
     def __init__(self):

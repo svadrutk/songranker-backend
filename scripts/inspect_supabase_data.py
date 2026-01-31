@@ -13,11 +13,11 @@ backend_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(backend_root))
 os.chdir(backend_root)
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 load_dotenv()
 
-from app.clients.supabase_db import supabase_client
-from postgrest.types import CountMethod
+from app.clients.supabase_db import supabase_client  # noqa: E402
+from postgrest.types import CountMethod  # noqa: E402
 
 
 async def main():

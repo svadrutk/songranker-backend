@@ -1,12 +1,11 @@
 import asyncio
 import logging
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Query, Request, BackgroundTasks
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, Request, BackgroundTasks  # pyright: ignore[reportMissingImports]
+from pydantic import BaseModel  # pyright: ignore[reportMissingImports]
 from app.clients.supabase_db import supabase_client
 from app.core.limiter import limiter
 from app.core.global_ranking_config import (
-    GLOBAL_UPDATE_INTERVAL_MINUTES,
     REDIS_LOCK_EXPIRY_SECONDS,
     get_global_update_lock_key
 )

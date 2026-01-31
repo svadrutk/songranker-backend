@@ -1,4 +1,4 @@
-from pydantic import BaseModel, UUID4, Field, ConfigDict
+from pydantic import BaseModel, UUID4, Field
 from typing import List, Optional
 from datetime import datetime
 

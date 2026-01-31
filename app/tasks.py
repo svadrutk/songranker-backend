@@ -4,8 +4,7 @@ from typing import Dict, Any
 from app.core.deduplication import deep_deduplicate_session
 from app.core.ranking import RankingManager
 from app.clients.supabase_db import supabase_client
-from app.core.cache import cache
-from app.core.queue import task_queue, leaderboard_queue
+from app.core.queue import leaderboard_queue
 from app.core.global_ranking_config import (
     GLOBAL_UPDATE_INTERVAL_MINUTES,
     get_global_update_lock_key

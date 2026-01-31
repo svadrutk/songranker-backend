@@ -120,7 +120,7 @@ class SupabaseDB:
         try:
             response = await client.table("session_songs").insert(links).execute()
             if not response.data:
-                logger.error(f"Failed to link songs: No data returned. Possible RLS or Schema issue.")
+                logger.error("Failed to link songs: No data returned. Possible RLS or Schema issue.")
         except Exception as e:
             logger.error(f"CRITICAL: Failed to link songs to session {session_id}: {e}")
             raise
