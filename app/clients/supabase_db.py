@@ -208,11 +208,13 @@ class SupabaseDB:
         is_tie: bool,
         new_elo_a: float,
         new_elo_b: float,
+        prev_elo_a: float,
+        prev_elo_b: float,
         decision_time_ms: Optional[int] = None
     ):
         """
         Record a comparison and update Elos in a single transaction-like block.
-        Ideally this would be a single RPC call to handle atomicity.
+        Stores previous ELO values to support undo functionality.
         """
         client = await self.get_client()
         
@@ -225,7 +227,9 @@ class SupabaseDB:
             "p_winner_id": winner_id,
             "p_is_tie": is_tie,
             "p_new_elo_a": new_elo_a,
-            "p_new_elo_b": new_elo_b
+            "p_new_elo_b": new_elo_b,
+            "p_prev_elo_a": prev_elo_a,
+            "p_prev_elo_b": prev_elo_b
         }
         
         if decision_time_ms is not None:
@@ -536,6 +540,38 @@ class SupabaseDB:
                 "completed_sessions": 0,
                 "completion_rate": 0,
             }
+
+    async def undo_last_comparison(self, session_id: str) -> Dict[str, Any]:
+        """
+        Undo the last comparison in a session.
+        Restores previous ELO values and deletes the comparison record.
+        Returns info about the undone comparison.
+        """
+        client = await self.get_client()
+        try:
+            response = await client.rpc("undo_last_duel", {
+                "p_session_id": session_id
+            }).execute()
+            
+            if not response.data or len(response.data) == 0:
+                raise ValueError("No comparison found to undo")
+            
+            # RPC returns a table, so we get the first row
+            result = response.data[0]
+            return {
+                "comparison_id": result["comparison_id"],
+                "song_a_id": result["song_a_id"],
+                "song_b_id": result["song_b_id"],
+                "restored_elo_a": result["restored_elo_a"],
+                "restored_elo_b": result["restored_elo_b"]
+            }
+        except Exception as e:
+            error_str = str(e)
+            # Check for PostgreSQL RAISE EXCEPTION errors
+            if "No comparisons found" in error_str or "Cannot undo" in error_str:
+                raise ValueError(error_str)
+            logger.error(f"Failed to undo last comparison for session {session_id}: {e}")
+            raise
 
     async def create_feedback(self, message: str, user_id: Optional[str] = None, user_agent: Optional[str] = None, url: Optional[str] = None) -> Dict[str, Any]:
         """Create a new feedback/bug report entry."""

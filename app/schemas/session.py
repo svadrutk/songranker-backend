@@ -55,3 +55,13 @@ class ComparisonResponse(BaseModel):
     new_elo_b: float
     sync_queued: bool = False
     convergence_score: Optional[int] = None
+
+
+class UndoComparisonResponse(BaseModel):
+    success: bool
+    comparison_id: UUID4
+    song_a_id: UUID4
+    song_b_id: UUID4
+    restored_elo_a: float
+    restored_elo_b: float
+    sync_queued: bool = False
