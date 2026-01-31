@@ -378,8 +378,27 @@ class SupabaseDB:
         return None
 
     async def get_artists_with_leaderboards(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get all artists that have global leaderboards, ordered by comparison count (desc)."""
+        """
+        Get artists that have global leaderboards, ordered by popularity (distinct users).
+        Each user counts at most once per artist (one comparison per user per artist).
+        Returns same shape as before: artist, total_comparisons_count (= distinct users), last_global_update_at.
+        """
         client = await self.get_client()
+        try:
+            response = await client.rpc("get_artists_leaderboard_popularity", {"p_limit": limit}).execute()
+            if response.data and len(response.data) > 0:
+                # Map to same shape as artist_stats for API compatibility
+                return [
+                    {
+                        "artist": row["artist"],
+                        "total_comparisons_count": int(row["distinct_users_count"]),
+                        "last_global_update_at": row.get("last_global_update_at"),
+                    }
+                    for row in (response.data or [])
+                ]
+        except Exception as e:
+            logger.warning(f"get_artists_leaderboard_popularity RPC failed, falling back to artist_stats: {e}")
+        # Fallback: order by raw comparison count (no distinct-user semantics)
         try:
             response = await client.table("artist_stats") \
                 .select("artist, total_comparisons_count, last_global_update_at") \
@@ -474,6 +493,49 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error fetching primary artist for session {session_id}: {e}")
             return None
+
+    async def get_global_activity_stats(self) -> Dict[str, Any]:
+        """
+        Get global aggregate stats for all users: total sessions, total comparisons,
+        distinct artists ranked, and average convergence score.
+        """
+        client = await self.get_client()
+        try:
+            sessions_res = await client.table("sessions").select("id", count=CountMethod.exact).execute()
+            comparisons_res = await client.table("comparisons").select("id", count=CountMethod.exact).execute()
+            artist_stats_res = await client.table("artist_stats").select("artist", count=CountMethod.exact).execute()
+
+            total_sessions = sessions_res.count or 0
+            total_comparisons = comparisons_res.count or 0
+            artists_ranked = artist_stats_res.count or 0
+
+            # Average convergence: fetch convergence_score from sessions (non-null)
+            conv_res = await client.table("sessions").select("convergence_score").not_.is_("convergence_score", "null").execute()
+            scores = [float(r["convergence_score"]) for r in (conv_res.data or []) if r.get("convergence_score") is not None]
+            avg_convergence = round(sum(scores) / len(scores), 0) if scores else 0
+
+            # Completed sessions (convergence >= 90) for completion rate
+            completed = sum(1 for s in scores if s >= 90)
+            completion_rate = round((completed / len(scores)) * 100, 0) if scores else 0
+
+            return {
+                "total_sessions": total_sessions,
+                "total_comparisons": total_comparisons,
+                "artists_ranked": artists_ranked,
+                "avg_convergence": avg_convergence,
+                "completed_sessions": completed,
+                "completion_rate": completion_rate,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get global activity stats: {e}")
+            return {
+                "total_sessions": 0,
+                "total_comparisons": 0,
+                "artists_ranked": 0,
+                "avg_convergence": 0,
+                "completed_sessions": 0,
+                "completion_rate": 0,
+            }
 
     async def create_feedback(self, message: str, user_id: Optional[str] = None, user_agent: Optional[str] = None, url: Optional[str] = None) -> Dict[str, Any]:
         """Create a new feedback/bug report entry."""

@@ -34,7 +34,7 @@ class LeaderboardSong(BaseModel):
     rank: int
 
 
-class LeaderboardResponse(BaseModel)
+class LeaderboardResponse(BaseModel):
     """Response for the global leaderboard."""
     artist: str
     songs: List[LeaderboardSong]
@@ -94,9 +94,9 @@ async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[Dict[str, 
 
 
 class ArtistWithLeaderboard(BaseModel):
-    """An artist that has a global leaderboard."""
+    """An artist that has a global leaderboard. total_comparisons = distinct users who have ranked this artist (one per user)."""
     artist: str
-    total_comparisons: int
+    total_comparisons: int  # Distinct users who have ranked this artist (one comparison per user per artist)
     last_updated: Optional[str] = None
 
 
@@ -112,8 +112,9 @@ async def get_artists_with_leaderboards(
     limit: int = Query(50, ge=1, le=200, description="Max number of artists to return")
 ) -> ArtistsWithLeaderboardsResponse:
     """
-    List artists that have global leaderboards, ordered by total comparisons (desc).
-    Used by the dashboard to show "Artists with global rankings" and link to each leaderboard.
+    List artists that have global leaderboards, ordered by popularity (desc).
+    total_comparisons = number of distinct users who have ranked that artist (one per user per artist).
+    Used by the dashboard for "Most popular artists" and to link to each leaderboard.
     """
     rows = await supabase_client.get_artists_with_leaderboards(limit=limit)
     artists = [
