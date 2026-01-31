@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from typing import List
+from typing import List, Any, Dict
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from app.schemas.session import SessionCreate, SessionResponse, SessionSong, ComparisonCreate, ComparisonResponse, SessionSummary, SessionDetail
 from app.clients.supabase_db import supabase_client
@@ -13,6 +13,17 @@ from uuid import UUID
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/activity/global", response_model=Dict[str, Any])
+async def get_global_activity():
+    """Return global aggregate stats: total sessions, comparisons, artists ranked, avg convergence."""
+    try:
+        return await supabase_client.get_global_activity_stats()
+    except Exception as e:
+        logger.error(f"Failed to fetch global activity: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/users/{user_id}/sessions", response_model=List[SessionSummary])
 async def get_user_sessions(user_id: UUID):

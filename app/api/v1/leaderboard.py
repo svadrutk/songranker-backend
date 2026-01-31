@@ -4,7 +4,6 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query, Request, BackgroundTasks
 from pydantic import BaseModel
 from app.clients.supabase_db import supabase_client
-from app.core.cache import cache
 from app.core.limiter import limiter
 from app.core.global_ranking_config import (
     GLOBAL_UPDATE_INTERVAL_MINUTES,
@@ -94,6 +93,41 @@ async def fetch_leaderboard_data(artist: str, limit: int) -> Optional[Dict[str, 
         raise HTTPException(status_code=500, detail=f"Internal error fetching leaderboard: {e}")
 
 
+class ArtistWithLeaderboard(BaseModel):
+    """An artist that has a global leaderboard. total_comparisons = distinct users who have ranked this artist (one per user)."""
+    artist: str
+    total_comparisons: int  # Distinct users who have ranked this artist (one comparison per user per artist)
+    last_updated: Optional[str] = None
+
+
+class ArtistsWithLeaderboardsResponse(BaseModel):
+    """Response listing artists that have global leaderboards."""
+    artists: List[ArtistWithLeaderboard]
+
+
+@router.get("/leaderboard/artists", response_model=ArtistsWithLeaderboardsResponse)
+@limiter.limit("60/minute")
+async def get_artists_with_leaderboards(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200, description="Max number of artists to return")
+) -> ArtistsWithLeaderboardsResponse:
+    """
+    List artists that have global leaderboards, ordered by popularity (desc).
+    total_comparisons = number of distinct users who have ranked that artist (one per user per artist).
+    Used by the dashboard for "Most popular artists" and to link to each leaderboard.
+    """
+    rows = await supabase_client.get_artists_with_leaderboards(limit=limit)
+    artists = [
+        ArtistWithLeaderboard(
+            artist=r["artist"],
+            total_comparisons=r.get("total_comparisons_count", 0),
+            last_updated=r.get("last_global_update_at")
+        )
+        for r in rows
+    ]
+    return ArtistsWithLeaderboardsResponse(artists=artists)
+
+
 @router.get("/leaderboard/{artist}", response_model=LeaderboardResponse)
 @limiter.limit("60/minute")
 async def get_global_leaderboard(
@@ -105,18 +139,18 @@ async def get_global_leaderboard(
     """
     Get the global leaderboard for a specific artist.
     Returns the top songs ranked by global_elo across all user sessions.
-    
-    - **artist**: The artist name (must match exactly as stored in the database)
+
+    - **artist**: The artist name (must match the name stored in the database exactly)
     - **limit**: Maximum number of songs to return (default: 100, max: 500)
-    
+
     If there are pending comparisons and the ranking hasn't updated in the required interval,
     this endpoint will trigger a background global ranking update.
     """
     logger.info(f"[API] GET /leaderboard/{artist} limit={limit}")
-    
+
     # Fetch directly from DB to avoid cache confusion
     result = await fetch_leaderboard_data(artist, limit)
-    
+
     if result is None or (result.get("total_comparisons", 0) == 0 and result.get("pending_comparisons", 0) == 0):
         raise HTTPException(
             status_code=404,
@@ -241,12 +275,19 @@ async def get_artist_leaderboard_stats(request: Request, artist: str) -> Dict[st
     """
     Get statistics about an artist's global leaderboard.
     Returns metadata without the full song list (lighter weight than full leaderboard).
+    Artist name must match the name stored in the database exactly.
     """
     stats, total_comparisons = await asyncio.gather(
         supabase_client.get_artist_stats(artist),
         supabase_client.get_artist_total_comparisons(artist)
     )
-    
+
+    if not stats:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No statistics found for artist: {artist}"
+        )
+
     # Calculate pending comparisons
     processed_comparisons, pending_comparisons = calculate_pending_comparisons(
         total_comparisons, stats
