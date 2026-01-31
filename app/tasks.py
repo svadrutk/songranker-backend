@@ -145,9 +145,15 @@ async def process_ranking_update(session_id: str) -> None:
     curr_top_ids = [x[0] for x in curr_ranking_list]
     
     # 5. Calculate convergence score
-    quantity_score = RankingManager.calculate_progress(total_duels, len(songs))
-    stability_score = RankingManager.calculate_stability_score(prev_top_ids, curr_top_ids)
-    convergence_score = RankingManager.calculate_final_convergence(quantity_score, stability_score)
+    # If there are no comparisons, convergence is 0 (can't have stability without data)
+    if total_duels == 0:
+        convergence_score = 0
+        quantity_score = 0.0
+        stability_score = 0.0
+    else:
+        quantity_score = RankingManager.calculate_progress(total_duels, len(songs))
+        stability_score = RankingManager.calculate_stability_score(prev_top_ids, curr_top_ids)
+        convergence_score = RankingManager.calculate_final_convergence(quantity_score, stability_score)
     
     logger.info(f"[RANKING] Session session_id={session_id}: quantity={quantity_score:.2f}, stability={stability_score:.2f}, convergence={convergence_score}")
     

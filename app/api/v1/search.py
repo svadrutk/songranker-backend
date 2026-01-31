@@ -221,6 +221,7 @@ async def _get_artist_suggestions(query: str, client: httpx.AsyncClient) -> List
         try:
             # We use a lightweight search for artists only
             search_res = await spotify_client.call_via_worker("search_artists_only", query=query)
+            logger.info(f"[suggest] Spotify worker returned {len(search_res) if search_res else 0} names for query={query!r}")
             if search_res:
                 return [{"name": name} for name in search_res[:5]]
         except Exception as e:
@@ -251,8 +252,9 @@ async def suggest(request: Request, background_tasks: BackgroundTasks, query: st
         ttl_seconds=14400, # 4 hours (Medium TTL)
         background_tasks=background_tasks
     )
-    
-    return results or []
+    out = results or []
+    logger.info(f"[suggest] query={query!r} returning {len(out)} suggestions")
+    return out
 
 async def _search_fallback(query: str, client: httpx.AsyncClient):
     """Final fallback to pure MusicBrainz if context fails."""

@@ -2,7 +2,7 @@ import logging
 import asyncio
 from typing import List, Any, Dict
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from app.schemas.session import SessionCreate, SessionResponse, SessionSong, ComparisonCreate, ComparisonResponse, SessionSummary, SessionDetail
+from app.schemas.session import SessionCreate, SessionResponse, SessionSong, ComparisonCreate, ComparisonResponse, SessionSummary, SessionDetail, UndoComparisonResponse
 from app.clients.supabase_db import supabase_client
 from app.core.utils import normalize_title, calculate_elo
 from app.core.queue import task_queue
@@ -114,12 +114,15 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate, back
             new_elo_a, new_elo_b = calculate_elo(elo_a, elo_b, score_a)
 
         # 3. Persist comparison and updated Elos in one atomic operation
+        # Pass previous ELO values to support undo functionality
         await supabase_client.record_comparison_and_update_elo(
             str(session_id), id_a, id_b, 
             str(comparison.winner_id) if comparison.winner_id else None,
             comparison.is_tie,
             new_elo_a,
             new_elo_b,
+            prev_elo_a=elo_a,
+            prev_elo_b=elo_b,
             decision_time_ms=comparison.decision_time_ms
         )
 
@@ -152,6 +155,42 @@ async def create_comparison(session_id: UUID, comparison: ComparisonCreate, back
     except Exception as e:
         logger.error(f"Failed to record comparison: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/sessions/{session_id}/comparisons/last", response_model=UndoComparisonResponse)
+async def undo_last_comparison(session_id: UUID, background_tasks: BackgroundTasks):
+    """
+    Undo the last comparison in a session.
+    Restores previous ELO values and deletes the comparison record.
+    Triggers a ranking recalculation in the background.
+    """
+    try:
+        # 1. Call the RPC to undo the last comparison
+        result = await supabase_client.undo_last_comparison(str(session_id))
+        
+        # 2. Trigger ranking recalculation to update BT strengths
+        from app.tasks import process_ranking_update
+        background_tasks.add_task(process_ranking_update, str(session_id))
+        
+        logger.info(f"Undid comparison {result['comparison_id']} in session {session_id}")
+        
+        return UndoComparisonResponse(
+            success=True,
+            comparison_id=result["comparison_id"],
+            song_a_id=result["song_a_id"],
+            song_b_id=result["song_b_id"],
+            restored_elo_a=result["restored_elo_a"],
+            restored_elo_b=result["restored_elo_b"],
+            sync_queued=True
+        )
+        
+    except ValueError as e:
+        # No comparison found or can't undo
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to undo comparison: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/sessions", response_model=SessionResponse)
 @limiter.limit("10/minute")
