@@ -130,7 +130,7 @@ class SupabaseDB:
         client = await self.get_client()
         try:
             res = await client.table("session_songs") \
-                .select("song_id, local_elo, bt_strength, songs(*)") \
+                .select("song_id, local_elo, bt_strength, comparison_count, songs(*)") \
                 .eq("session_id", str(session_id)) \
                 .execute()
             
@@ -158,6 +158,7 @@ class SupabaseDB:
                     "song_id": str(item.get("song_id", "")),
                     "local_elo": item.get("local_elo", 1500.0),
                     "bt_strength": item.get("bt_strength"),
+                    "comparison_count": item.get("comparison_count", 0),
                     **{k: v for k, v in details.items() if k != "id"}
                 })
 
@@ -246,6 +247,15 @@ class SupabaseDB:
             .eq("session_id", session_id) \
             .execute()
         return cast(List[Dict[str, Any]], response.data or [])
+
+    async def get_session_comparison_pairs(self, session_id: str) -> List[Dict[str, str]]:
+        """Get just the song pairs that have been compared (for history tracking)."""
+        client = await self.get_client()
+        response = await client.table("comparisons") \
+            .select("song_a_id, song_b_id") \
+            .eq("session_id", session_id) \
+            .execute()
+        return cast(List[Dict[str, str]], response.data or [])
 
     async def update_session_ranking(
         self, 
