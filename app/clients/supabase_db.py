@@ -130,7 +130,7 @@ class SupabaseDB:
         client = await self.get_client()
         try:
             res = await client.table("session_songs") \
-                .select("song_id, local_elo, bt_strength, songs(*)") \
+                .select("song_id, local_elo, bt_strength, comparison_count, songs(*)") \
                 .eq("session_id", str(session_id)) \
                 .execute()
             
@@ -158,6 +158,7 @@ class SupabaseDB:
                     "song_id": str(item.get("song_id", "")),
                     "local_elo": item.get("local_elo", 1500.0),
                     "bt_strength": item.get("bt_strength"),
+                    "comparison_count": item.get("comparison_count", 0),
                     **{k: v for k, v in details.items() if k != "id"}
                 })
 
