@@ -2,7 +2,7 @@ import logging
 import asyncio
 from typing import List, Any, Dict
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from app.schemas.session import SessionCreate, SessionResponse, SessionSong, ComparisonCreate, ComparisonResponse, SessionSummary, SessionDetail, UndoComparisonResponse
+from app.schemas.session import SessionCreate, SessionResponse, SessionSong, ComparisonCreate, ComparisonResponse, SessionSummary, SessionDetail, UndoComparisonResponse, ComparisonPair
 from app.clients.supabase_db import supabase_client
 from app.core.utils import normalize_title, calculate_elo
 from app.core.queue import task_queue
@@ -37,18 +37,20 @@ async def get_user_sessions(user_id: UUID):
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
 async def get_session_detail(session_id: UUID):
-    """Retrieve session metadata, songs, and comparison count."""
+    """Retrieve session metadata, songs, comparison count, and comparison history."""
     try:
-        songs, count, details = await asyncio.gather(
+        songs, count, details, comparison_pairs = await asyncio.gather(
             supabase_client.get_session_songs(str(session_id)),
             supabase_client.get_session_comparison_count(str(session_id)),
-            supabase_client.get_session_details(str(session_id))
+            supabase_client.get_session_details(str(session_id)),
+            supabase_client.get_session_comparison_pairs(str(session_id))
         )
         return SessionDetail(
             session_id=session_id,
             songs=[SessionSong(**s) for s in songs],
             comparison_count=count,
-            convergence_score=details.get("convergence_score")
+            convergence_score=details.get("convergence_score"),
+            comparisons=[ComparisonPair(**c) for c in comparison_pairs]
         )
     except Exception as e:
         logger.error(f"Failed to fetch detail for session {session_id}: {e}")

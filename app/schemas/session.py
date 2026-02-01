@@ -36,11 +36,17 @@ class SessionSong(BaseModel):
     local_elo: float
     bt_strength: Optional[float] = None
 
+class ComparisonPair(BaseModel):
+    """Lightweight model for tracking which pairs have been compared."""
+    song_a_id: UUID4
+    song_b_id: UUID4
+
 class SessionDetail(BaseModel):
     session_id: UUID4
     songs: List[SessionSong]
     comparison_count: int
     convergence_score: Optional[int] = None
+    comparisons: List[ComparisonPair] = Field(default_factory=list)
 
 class ComparisonCreate(BaseModel):
     song_a_id: UUID4

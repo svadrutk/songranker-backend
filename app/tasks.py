@@ -109,10 +109,9 @@ async def process_ranking_update(session_id: str) -> None:
     
     # 1. Fetch all session data in parallel
     fetch_start = time.time()
-    songs, comparisons, total_duels = await asyncio.gather(
+    songs, comparisons = await asyncio.gather(
         supabase_client.get_session_songs(session_id),
-        supabase_client.get_session_comparisons(session_id),
-        supabase_client.get_session_comparison_count(session_id)
+        supabase_client.get_session_comparisons(session_id)
     )
     fetch_time = (time.time() - fetch_start) * 1000
     logger.info(f"[TIMING] Data fetch took {fetch_time:.2f}ms")
@@ -121,42 +120,33 @@ async def process_ranking_update(session_id: str) -> None:
         logger.warning(f"[RANKING] No songs found for session_id={session_id}")
         return
 
-    # 2. Get previous ranking for stability calculation
-    prev_ranking = sorted(songs, key=lambda x: x.get("bt_strength") or 0.0, reverse=True)
-    prev_top_ids = [str(s["song_id"]) for s in prev_ranking]
-
-    # 3. Compute Bradley-Terry scores with warm start from previous values
+    # 2. Compute Bradley-Terry log-strengths using choix
     bt_start = time.time()
-    initial_p = {str(s["song_id"]): float(s.get("bt_strength") or 1.0) for s in songs}
     song_ids = [str(s["song_id"]) for s in songs]
-    bt_scores = RankingManager.compute_bradley_terry(song_ids, comparisons, initial_p=initial_p)
+    bt_scores = RankingManager.compute_bradley_terry(song_ids, comparisons)
     bt_time = (time.time() - bt_start) * 1000
     logger.info(f"[TIMING] Bradley-Terry computation took {bt_time:.2f}ms")
     
-    # 4. Build updates and current ranking
+    # 3. Build updates
+    # Note: bt_scores contains log-strengths (θ) from choix
     updates = []
-    curr_ranking_list = []
+    for sid, theta in bt_scores.items():
+        elo = RankingManager.theta_to_elo(theta)
+        updates.append({"song_id": sid, "bt_strength": theta, "local_elo": elo})
     
-    for sid, strength in bt_scores.items():
-        elo = RankingManager.bt_to_elo(strength)
-        updates.append({"song_id": sid, "bt_strength": strength, "local_elo": elo})
-        curr_ranking_list.append((sid, strength))
-        
-    curr_ranking_list.sort(key=lambda x: x[1], reverse=True)
-    curr_top_ids = [x[0] for x in curr_ranking_list]
+    # 4. Calculate convergence score using improved formula
+    # Based on coverage (unique pairs compared) and separation (ranking confidence)
+    convergence_score = RankingManager.calculate_convergence_v2(
+        comparisons=comparisons,
+        n_songs=len(songs),
+        bt_params=bt_scores
+    )
     
-    # 5. Calculate convergence score
-    # If there are no comparisons, convergence is 0 (can't have stability without data)
-    if total_duels == 0:
-        convergence_score = 0
-        quantity_score = 0.0
-        stability_score = 0.0
-    else:
-        quantity_score = RankingManager.calculate_progress(total_duels, len(songs))
-        stability_score = RankingManager.calculate_stability_score(prev_top_ids, curr_top_ids)
-        convergence_score = RankingManager.calculate_final_convergence(quantity_score, stability_score)
+    # Calculate legacy metrics for logging (for comparison during transition)
+    coverage = RankingManager.calculate_coverage(comparisons, len(songs))
+    separation = RankingManager.calculate_separation(bt_scores)
     
-    logger.info(f"[RANKING] Session session_id={session_id}: quantity={quantity_score:.2f}, stability={stability_score:.2f}, convergence={convergence_score}")
+    logger.info(f"[RANKING] Session session_id={session_id}: coverage={coverage:.2f}, separation={separation:.2f}, convergence={convergence_score}")
     
     # 6. Persist results to database
     persist_start = time.time()
@@ -200,13 +190,14 @@ async def process_global_ranking(artist: str) -> None:
         return
     
     # 2. Handle case with no comparisons yet - initialize with defaults
+    # θ = 0 is neutral log-strength, corresponding to Elo = 1500
     if not comparisons:
         logger.warning(f"[GLOBAL] No comparisons found for artist='{artist}'")
         updates = [
             {
                 "song_id": str(s["song_id"]),
                 "global_elo": 1500.0,
-                "global_bt_strength": 1.0,
+                "global_bt_strength": 0.0,  # θ = 0 (neutral)
                 "global_votes_count": 0
             }
             for s in songs
@@ -217,11 +208,10 @@ async def process_global_ranking(artist: str) -> None:
         )
         return
     
-    # 3. Compute Bradley-Terry scores with warm start from previous global values
+    # 3. Compute Bradley-Terry log-strengths using choix
     bt_start = time.time()
-    initial_p = {str(s["song_id"]): float(s.get("global_bt_strength") or 1.0) for s in songs}
     song_ids = [str(s["song_id"]) for s in songs]
-    bt_scores = RankingManager.compute_bradley_terry(song_ids, comparisons, initial_p=initial_p)
+    bt_scores = RankingManager.compute_bradley_terry(song_ids, comparisons)
     bt_time = (time.time() - bt_start) * 1000
     logger.info(f"[GLOBAL] Bradley-Terry computation took {bt_time:.2f}ms")
     
@@ -236,13 +226,14 @@ async def process_global_ranking(artist: str) -> None:
             vote_counts[song_b] += 1
     
     # 5. Build updates with Elo and vote counts
+    # Note: bt_scores now contains log-strengths (θ) from choix
     updates = []
-    for sid, strength in bt_scores.items():
-        elo = RankingManager.bt_to_elo(strength)
+    for sid, theta in bt_scores.items():
+        elo = RankingManager.theta_to_elo(theta)
         updates.append({
             "song_id": sid,
             "global_elo": elo,
-            "global_bt_strength": strength,
+            "global_bt_strength": theta,
             "global_votes_count": vote_counts.get(sid, 0)
         })
     
