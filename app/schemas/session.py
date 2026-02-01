@@ -37,9 +37,11 @@ class SessionSong(BaseModel):
     bt_strength: Optional[float] = None
 
 class ComparisonPair(BaseModel):
-    """Lightweight model for tracking which pairs have been compared."""
+    """Model for tracking comparisons with outcome info for IDC filtering."""
     song_a_id: UUID4
     song_b_id: UUID4
+    winner_id: Optional[UUID4] = None
+    is_tie: bool = False
 
 class SessionDetail(BaseModel):
     session_id: UUID4
