@@ -248,14 +248,14 @@ class SupabaseDB:
             .execute()
         return cast(List[Dict[str, Any]], response.data or [])
 
-    async def get_session_comparison_pairs(self, session_id: str) -> List[Dict[str, str]]:
-        """Get just the song pairs that have been compared (for history tracking)."""
+    async def get_session_comparison_pairs(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get comparison pairs with outcome info (for history tracking and IDC filtering)."""
         client = await self.get_client()
         response = await client.table("comparisons") \
-            .select("song_a_id, song_b_id") \
+            .select("song_a_id, song_b_id, winner_id, is_tie") \
             .eq("session_id", session_id) \
             .execute()
-        return cast(List[Dict[str, str]], response.data or [])
+        return cast(List[Dict[str, Any]], response.data or [])
 
     async def update_session_ranking(
         self, 

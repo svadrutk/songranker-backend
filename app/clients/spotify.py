@@ -78,46 +78,6 @@ class SpotifyClient:
         
         return await self._get_request(active_client, token, self.base_url, endpoint, params)
 
-    async def call_via_worker(self, method_name: str, timeout: float = 20.0, **kwargs) -> Any:
-        """
-        Proxy method that enqueues Spotify API calls to a dedicated worker.
-        This ensures all Spotify traffic is serialized, preventing rate limit issues.
-        
-        Args:
-            method_name: The SpotifyClient method to call (e.g., "search_artist_albums")
-            timeout: Maximum time to wait for the worker to complete (seconds)
-            **kwargs: Arguments to pass to the method
-            
-        Returns:
-            The result from the Spotify API call
-            
-        Raises:
-            TimeoutError: If the worker doesn't complete within the timeout
-            Exception: If the worker task fails
-        """
-        from app.core.queue import spotify_queue
-        from app.tasks import run_spotify_method
-        
-        # Enqueue the task to the dedicated Spotify worker
-        job = spotify_queue.enqueue(run_spotify_method, method_name, **kwargs)
-        
-        # Poll for completion
-        start_time = time.time()
-        while True:
-            status = job.get_status()
-            
-            if status == 'finished':
-                return job.result
-            elif status == 'failed':
-                raise Exception(f"Spotify worker task failed: {job.exc_info}")
-            
-            # Check timeout
-            if time.time() - start_time > timeout:
-                raise TimeoutError(f"Spotify worker timed out after {timeout}s")
-            
-            # Wait a bit before checking again
-            await asyncio.sleep(0.1)
-
     async def search_artist_albums(self, artist_name: str, client: Optional[httpx.AsyncClient] = None) -> List[Dict[str, Any]]:
         """
         Search for albums by artist. 

@@ -174,12 +174,11 @@ async def search(request: Request, background_tasks: BackgroundTasks, query: str
     # 2. FAST PATH: Spotify
     # If credentials are present, use Spotify as the primary search engine.
     # It is faster (200ms vs 1s+) and handles typos natively.
-    # Route through dedicated worker for rate limiting.
     if settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET:
         cache_key = f"spotify_search:{norm_query}"
         results = await cache.get_or_fetch(
             cache_key,
-            lambda: spotify_client.call_via_worker("search_artist_albums", artist_name=query),
+            lambda: spotify_client.search_artist_albums(query),
             ttl_seconds=3600,
             background_tasks=background_tasks
         )
@@ -220,8 +219,8 @@ async def _get_artist_suggestions(query: str, client: httpx.AsyncClient) -> List
     if settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET:
         try:
             # We use a lightweight search for artists only
-            search_res = await spotify_client.call_via_worker("search_artists_only", query=query)
-            logger.info(f"[suggest] Spotify worker returned {len(search_res) if search_res else 0} names for query={query!r}")
+            search_res = await spotify_client.search_artists_only(query)
+            logger.info(f"[suggest] Spotify returned {len(search_res) if search_res else 0} names for query={query!r}")
             if search_res:
                 return [{"name": name} for name in search_res[:5]]
         except Exception as e:
@@ -317,7 +316,7 @@ async def get_tracks(
              logger.info(f"Spotify ID detected: {release_group_id}")
              if artist and title:
                  background_tasks.add_task(_resolve_mbid_background, artist, title, release_group_id, client)
-             return await spotify_client.call_via_worker("get_album_tracks", spotify_id=release_group_id)
+             return await spotify_client.get_album_tracks(release_group_id)
 
         # 2. Parallel Strategy
         valid_results = await _fetch_tracks_parallel(release_group_id, artist, title, client)

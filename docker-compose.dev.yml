@@ -23,13 +23,6 @@ services:
       - ./worker.py:/app/worker.py
     # Workers will auto-reload when code changes
 
-  worker_spotify:
-    volumes:
-      # Mount source code for hot reloading
-      - ./app:/app/app
-      - ./worker.py:/app/worker.py
-    # Workers will auto-reload when code changes
-
   worker_leaderboard:
     build: .
     volumes:

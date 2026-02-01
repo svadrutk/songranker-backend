@@ -309,18 +309,3 @@ def run_global_ranking_update(artist: str) -> None:
         # still be blocked by the Redis lock in the API layer.
         _global_update_locks.discard(artist.lower())
 
-def run_spotify_method(method_name: str, **kwargs) -> Any:
-    """
-    Worker task to execute Spotify client methods.
-    This ensures all Spotify API calls are serialized through a single worker,
-    providing natural rate limiting across all Gunicorn instances.
-    """
-    from app.clients.spotify import spotify_client
-    
-    async def _execute():
-        method = getattr(spotify_client, method_name)
-        # Remove 'client' from kwargs if it exists because the worker uses its own client
-        kwargs.pop('client', None)
-        return await method(**kwargs)
-
-    return _worker_wrapper(_execute(), f"Spotify:{method_name}", str(kwargs.get('query') or kwargs.get('release_group_id') or 'args'))

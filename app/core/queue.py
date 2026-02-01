@@ -23,8 +23,7 @@ def get_async_redis():
 
 # Initialize the queues
 # 'default' is for ranking and deduplication tasks
-# 'spotify' is for all Spotify API calls (rate limiting)
 # 'leaderboard' is for heavy global ranking calculations
+# Note: Spotify API calls are now made directly (no queue) - rate limits are handled via tenacity retries
 task_queue = Queue("default", connection=sync_redis_conn)
-spotify_queue = Queue("spotify", connection=sync_redis_conn)
 leaderboard_queue = Queue("leaderboard", connection=sync_redis_conn)

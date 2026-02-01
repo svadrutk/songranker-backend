@@ -31,6 +31,6 @@ EXPOSE 8000
 # Run the application
 # We run the web server and all background workers in the same container for simplicity on Railway
 # worker_default: handles ranking/deduplication (can be multiple)
-# worker_spotify: handles Spotify API calls (MUST be exactly 1 for rate limiting)
 # worker_leaderboard: handles heavy global ranking calculations
-CMD sh -c "python worker.py --queues default & python worker.py --queues spotify & python worker.py --queues leaderboard & gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 120 --keep-alive 5"
+# Note: Spotify API calls are made directly from the web process (no worker queue needed)
+CMD sh -c "python worker.py --queues default & python worker.py --queues leaderboard & gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 120 --keep-alive 5"
