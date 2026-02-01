@@ -20,7 +20,9 @@ async def create_feedback(request: Request, feedback: FeedbackCreate):
             message=feedback.message,
             user_id=str(feedback.user_id) if feedback.user_id else None,
             user_agent=feedback.user_agent,
-            url=feedback.url
+            url=feedback.url,
+            session_id=str(feedback.session_id) if feedback.session_id else None,
+            star_rating=feedback.star_rating
         )
         
         return FeedbackResponse(
