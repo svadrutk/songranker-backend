@@ -583,7 +583,7 @@ class SupabaseDB:
             logger.error(f"Failed to undo last comparison for session {session_id}: {e}")
             raise
 
-    async def create_feedback(self, message: str, user_id: Optional[str] = None, user_agent: Optional[str] = None, url: Optional[str] = None) -> Dict[str, Any]:
+    async def create_feedback(self, message: str, user_id: Optional[str] = None, user_agent: Optional[str] = None, url: Optional[str] = None, session_id: Optional[str] = None, star_rating: Optional[int] = None) -> Dict[str, Any]:
         """Create a new feedback/bug report entry."""
         client = await self.get_client()
         try:
@@ -594,6 +594,10 @@ class SupabaseDB:
                 payload["user_agent"] = user_agent
             if url:
                 payload["url"] = url
+            if session_id:
+                payload["session_id"] = session_id
+            if star_rating is not None:
+                payload["star_rating"] = star_rating
             
             response = await client.table("feedback").insert(payload).execute()
             if not response.data or not isinstance(response.data, list):
