@@ -1,6 +1,4 @@
 import requests
-import json
-import base64
 
 url = "http://localhost:8000/generate-receipt"
 

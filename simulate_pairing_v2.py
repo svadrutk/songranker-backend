@@ -6,7 +6,6 @@ Port of frontend pairing-v2.ts logic to Python.
 import asyncio
 import sys
 import random
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import List, Dict, Set, Tuple, Optional
 from app.clients.supabase_db import supabase_client

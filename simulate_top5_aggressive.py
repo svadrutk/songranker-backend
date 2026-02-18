@@ -46,13 +46,13 @@ async def simulate_aggressive(session_id: str):
                 target_ids.append(sid)
                 break
     
-    print(f"\nTarget songs that will beat everyone:")
+    print("\nTarget songs that will beat everyone:")
     for tid in target_ids:
         print(f"  ⭐ {id_to_name[tid]}")
     
     # Current top 4 that will be "dethroned"
     top4_ids = [sid for sid, _ in current_ranked[:4]]
-    print(f"\nCurrent top 4 that targets will beat:")
+    print("\nCurrent top 4 that targets will beat:")
     for sid in top4_ids:
         print(f"  - {id_to_name[sid]}")
     
@@ -86,8 +86,8 @@ async def simulate_aggressive(session_id: str):
             })
     
     print(f"\nAdding {len(synthetic_comparisons)} synthetic comparisons...")
-    print(f"  - Each target beats current top 4")
-    print(f"  - Each target beats songs ranked 15-25")
+    print("  - Each target beats current top 4")
+    print("  - Each target beats songs ranked 15-25")
     
     # Combine real + synthetic
     simulated_comparisons = deepcopy(comparisons) + synthetic_comparisons
@@ -120,7 +120,7 @@ async def simulate_aggressive(session_id: str):
         print(f"  {name:30} #{old_rank:2} → #{new_rank:2}  ({old_rank - new_rank:+d}) {in_top}")
     
     # Show what happened to the former top 4
-    print(f"\nFormer top 4 after being beaten:")
+    print("\nFormer top 4 after being beaten:")
     for tid in top4_ids:
         name = id_to_name[tid][:30]
         new_rank = next(j for j, (s, _) in enumerate(simulated_ranked, 1) if s == tid)
