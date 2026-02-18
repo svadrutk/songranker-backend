@@ -1,6 +1,6 @@
 import logging
-import os
-import io
+from io import BytesIO
+from pathlib import Path
 from typing import List, Optional, Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,20 +14,21 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Setup Jinja2 environment
-TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "templates")
-STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static")
-FONTS_DIR = os.path.join(STATIC_DIR, "fonts")
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+TEMPLATES_DIR = BASE_DIR / "templates"
+STATIC_DIR = BASE_DIR / "static"
+FONTS_DIR = STATIC_DIR / "fonts"
 
 # Load fonts as base64
-def load_font_base64(font_path: str) -> str:
+def load_font_base64(font_path: Path) -> str:
     with open(font_path, 'rb') as f:
         import base64
         return base64.b64encode(f.read()).decode('utf-8')
 
-GEIST_FONT_BASE64 = load_font_base64(os.path.join(FONTS_DIR, "Geist/variable/Geist[wght].ttf"))
-GEIST_MONO_FONT_BASE64 = load_font_base64(os.path.join(FONTS_DIR, "GeistMono-Bold.woff2"))
+GEIST_FONT_BASE64 = load_font_base64(FONTS_DIR / "Geist/variable/Geist[wght].ttf")
+GEIST_MONO_FONT_BASE64 = load_font_base64(FONTS_DIR / "GeistMono-Bold.woff2")
 
-env = Environment(loader=FileSystemLoader(TEMPLATES_DIR))
+env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
 
 class SongData(BaseModel):
     song_id: str
@@ -53,7 +54,7 @@ def generate_barcode_pattern(songs: List[SongData]) -> List[dict[str, Any]]:
         
     return pattern
 
-async def render_receipt_html(request: ReceiptRequest) -> str:
+def render_receipt_html(request: ReceiptRequest) -> str:
     template = env.get_template("receipt.html")
     
     top_10_songs = request.songs[:10]
@@ -73,13 +74,18 @@ async def render_receipt_html(request: ReceiptRequest) -> str:
 
 @limiter.limit("5/minute")
 @router.post("/generate-receipt")
-async def generate_receipt(request: ReceiptRequest):
+async def generate_receipt(request: ReceiptRequest) -> StreamingResponse:
     try:
         logger.info(f"Generating receipt for Order: {request.orderId}, Date: {request.dateStr}, Time: {request.timeStr}")
         
-        html_content = await render_receipt_html(request)
+        html_content = render_receipt_html(request)
         
         async with async_playwright() as p:
+            # NOTE: --no-sandbox is required for Playwright to run in most Docker/Linux environments
+            # without CAP_SYS_ADMIN. Security is maintained by:
+            # 1. Container isolation (service runs in a restricted container)
+            # 2. Input sanitization (Jinja2 autoescape=True)
+            # 3. Minimal browser permissions
             browser = await p.chromium.launch(args=["--no-sandbox", "--disable-setuid-sandbox"])
             page = await browser.new_page(viewport={"width": 1080, "height": 1200})
             
@@ -99,7 +105,7 @@ async def generate_receipt(request: ReceiptRequest):
                 
                 logger.info(f"Receipt generated successfully, size: {len(screenshot_bytes)} bytes")
                 
-                return StreamingResponse(io.BytesIO(screenshot_bytes), media_type="image/png")
+                return StreamingResponse(BytesIO(screenshot_bytes), media_type="image/png")
             finally:
                 await browser.close()
             

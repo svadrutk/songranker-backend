@@ -71,7 +71,7 @@ async def debug_session_ranking(session_id: str):
     coverage = RankingManager.calculate_coverage(comparisons, len(songs))
     separation = RankingManager.calculate_separation(bt_scores, comparisons)
     
-    print(f"\nMETRICS:")
+    print("\nMETRICS:")
     print("-" * 50)
     print(f"Coverage:     {coverage:.2%}")
     print(f"Separation:   {separation:.2%}")

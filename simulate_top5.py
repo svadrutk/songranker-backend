@@ -51,7 +51,7 @@ async def simulate_top5(session_id: str):
     # Find "fodder" songs - songs ranked 20+ that we'll have targets beat
     fodder_ids = [sid for sid, _ in current_ranked[20:30]]
     
-    print(f"\nFodder songs (ranked 20-30) that targets will beat:")
+    print("\nFodder songs (ranked 20-30) that targets will beat:")
     for sid in fodder_ids:
         print(f"  - {id_to_name[sid][:40]}")
     
@@ -69,7 +69,7 @@ async def simulate_top5(session_id: str):
             })
     
     print(f"\nAdding {len(synthetic_comparisons)} synthetic comparisons...")
-    print(f"(Each target beats 10 fodder songs)\n")
+    print("(Each target beats 10 fodder songs)\n")
     
     # Combine real + synthetic
     simulated_comparisons = deepcopy(comparisons) + synthetic_comparisons

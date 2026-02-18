@@ -1,21 +1,20 @@
 import asyncio
-import os
-import io
+from io import BytesIO
 import sys
+from pathlib import Path
 from PIL import Image
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Browser
 
 # Setup paths
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(PROJECT_ROOT)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(PROJECT_ROOT))
 
 # Mock some dependencies if needed, but here we can just import
-from app.clients.spotify import spotify_client
-from app.api.v1.image_generation import render_receipt_html, ReceiptRequest, SongData
-from app.core.config import settings
+from app.clients.spotify import spotify_client # noqa: E402
+from app.api.v1.image_generation import render_receipt_html, ReceiptRequest, SongData # noqa: E402
 
 # Output directory
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "songranker-frontend", "public", "assets", "marquee")
+OUTPUT_DIR = PROJECT_ROOT.parent / "songranker-frontend" / "public" / "assets" / "marquee"
 
 # Artists to showcase
 ARTIST_QUERIES = [
@@ -26,7 +25,7 @@ ARTIST_QUERIES = [
     "Nirvana", "David Bowie", "Prince", "Michael Jackson"
 ]
 
-async def generate_artist_receipt(artist_name: str, index: int, browser):
+async def generate_artist_receipt(artist_name: str, index: int, browser: Browser) -> None:
     try:
         print(f"[{index}] Processing {artist_name}...")
         
@@ -48,14 +47,14 @@ async def generate_artist_receipt(artist_name: str, index: int, browser):
             return
         
         # 3. Construct SongData
-        songs = []
-        for i, name in enumerate(track_names[:10]):
-            songs.append(SongData(
+        songs = [
+            SongData(
                 song_id=f"{album_id}-{i}",
                 name=name,
                 artist=artist_name,
                 cover_url=cover_url
-            ))
+            ) for i, name in enumerate(track_names[:10])
+        ]
             
         # 4. Construct ReceiptRequest
         request = ReceiptRequest(
@@ -66,48 +65,46 @@ async def generate_artist_receipt(artist_name: str, index: int, browser):
         )
         
         # 5. Render HTML
-        html_content = await render_receipt_html(request)
+        html_content = render_receipt_html(request)
         
         # 6. Screenshot with Playwright
-        page = await browser.new_page(viewport={"width": 1080, "height": 1200})
-        await page.set_content(html_content, wait_until="networkidle", timeout=10000)
-        await page.evaluate("document.fonts.ready")
-        
-        element = await page.query_selector("body")
-        if not element:
-            print(f"  ! Could not find body for {artist_name}")
-            await page.close()
-            return
+        async with await browser.new_page(viewport={"width": 900, "height": 1200}) as page:
+            await page.set_content(html_content, wait_until="networkidle", timeout=10000)
             
-        png_bytes = await element.screenshot(type="png", timeout=10000)
-        await page.close()
+            element = await page.query_selector(".receipt-container")
+            if not element:
+                print(f"  ! Could not find receipt-container for {artist_name}")
+                return
+                
+            png_bytes = await element.screenshot(type="png", timeout=10000, omit_background=True)
         
         # 7. Convert to WebP using Pillow
-        img = Image.open(io.BytesIO(png_bytes))
-        # Optimize for 400px width
-        aspect_ratio = img.height / img.width
-        img = img.resize((400, int(400 * aspect_ratio)), Image.Resampling.LANCZOS)
+        img = Image.open(BytesIO(png_bytes))
         
-        output_path = os.path.join(OUTPUT_DIR, f"receipt_{index}.webp")
-        img.save(output_path, "WEBP", quality=75)
+        # Resize to 400px width to reduce VRAM usage (performance-oracle)
+        target_width = 400
+        w_percent = (target_width / float(img.size[0]))
+        h_size = int((float(img.size[1]) * float(w_percent)))
+        img = img.resize((target_width, h_size), Image.Resampling.LANCZOS)
+        
+        output_path = OUTPUT_DIR / f"receipt_{index}.webp"
+        img.save(output_path, "WEBP", quality=60)
         print(f"  ✓ Saved to {output_path}")
         
     except Exception as e:
         print(f"  ! Error processing {artist_name}: {e}")
 
-async def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+async def main() -> None:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
     async with async_playwright() as p:
-        # Launch browser with specific flags for reliability in various environments
+        # NOTE: --no-sandbox is required for Playwright to run in most Docker/Linux environments
+        # without CAP_SYS_ADMIN. Security is maintained by container isolation and input sanitization.
         browser = await p.chromium.launch(args=["--no-sandbox", "--disable-setuid-sandbox"])
         
-        # Run in batches to avoid overwhelming the Spotify API or local resources
-        batch_size = 4
-        for i in range(0, len(ARTIST_QUERIES), batch_size):
-            batch = ARTIST_QUERIES[i:i+batch_size]
-            tasks = [generate_artist_receipt(name, i + j, browser) for j, name in enumerate(batch)]
-            await asyncio.gather(*tasks)
+        # Run all tasks concurrently for simplicity
+        tasks = [generate_artist_receipt(name, i, browser) for i, name in enumerate(ARTIST_QUERIES)]
+        await asyncio.gather(*tasks)
             
         await browser.close()
 
