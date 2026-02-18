@@ -53,31 +53,31 @@ def generate_barcode_pattern(songs: List[SongData]) -> List[dict[str, Any]]:
         
     return pattern
 
+async def render_receipt_html(request: ReceiptRequest) -> str:
+    template = env.get_template("receipt.html")
+    
+    top_10_songs = request.songs[:10]
+    barcode_pattern = generate_barcode_pattern(request.songs)
+    
+    context = {
+        "songs": top_10_songs,
+        "order_id": str(request.orderId),
+        "date_str": str(request.dateStr),
+        "time_str": str(request.timeStr),
+        "barcode_pattern": barcode_pattern,
+        "geist_font_base64": GEIST_FONT_BASE64,
+        "geist_mono_font_base64": GEIST_MONO_FONT_BASE64
+    }
+    
+    return template.render(**context)
+
 @limiter.limit("5/minute")
 @router.post("/generate-receipt")
 async def generate_receipt(request: ReceiptRequest):
     try:
         logger.info(f"Generating receipt for Order: {request.orderId}, Date: {request.dateStr}, Time: {request.timeStr}")
         
-        template = env.get_template("receipt.html")
-        
-        top_10_songs = request.songs[:10]
-        barcode_pattern = generate_barcode_pattern(request.songs)
-        
-        context = {
-            "songs": top_10_songs,
-            "order_id": str(request.orderId),
-            "date_str": str(request.dateStr),
-            "time_str": str(request.timeStr),
-            "barcode_pattern": barcode_pattern,
-            "geist_font_base64": GEIST_FONT_BASE64,
-            "geist_mono_font_base64": GEIST_MONO_FONT_BASE64
-        }
-        
-        logger.info(f"Rendering template with context keys: {list(context.keys())}")
-        logger.info(f"Order ID value: '{context['order_id']}'")
-        
-        html_content = template.render(**context)
+        html_content = await render_receipt_html(request)
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(args=["--no-sandbox", "--disable-setuid-sandbox"])
