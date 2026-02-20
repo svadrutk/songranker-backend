@@ -39,24 +39,47 @@ class SupabaseDB:
     async def bulk_upsert_songs(self, songs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Upsert a list of songs into the global catalog.
-        Uses the (artist, normalized_name) unique constraint.
+        Uses ISRC as the primary deduplication key, with (artist, normalized_name) as fallback.
         """
         client = await self.get_client()
         try:
-            # Upsert returns the inserted/updated rows
+            # We first try to upsert with ISRC if possible, but Supabase/Postgres 
+            # upsert on_conflict only supports one index. 
+            # For now, we follow the plan's ISRC-first strategy.
             response = await client.table("songs").upsert(
                 songs,
-                on_conflict="artist,normalized_name"
+                on_conflict="isrc"
             ).execute()
             return cast(List[Dict[str, Any]], response.data)
         except Exception as e:
-            logger.error(f"Failed bulk upsert of songs: {e}")
-            raise
+            logger.warning(f"ISRC upsert failed (likely missing ISRC on some tracks), falling back to artist/name: {e}")
+            try:
+                response = await client.table("songs").upsert(
+                    songs,
+                    on_conflict="artist,normalized_name"
+                ).execute()
+                return cast(List[Dict[str, Any]], response.data)
+            except Exception as ex:
+                logger.error(f"Failed fallback bulk upsert of songs: {ex}")
+                raise
 
-    async def create_session(self, user_id: Optional[str] = None) -> str:
+    async def create_session(
+        self, 
+        user_id: Optional[str] = None,
+        playlist_id: Optional[str] = None,
+        playlist_name: Optional[str] = None,
+        source_platform: Optional[str] = "manual",
+        collection_metadata: Optional[dict] = None
+    ) -> str:
         """Create a new session and return its ID."""
         client = await self.get_client()
-        payload = {"status": "active"}
+        payload = {
+            "status": "active",
+            "playlist_id": playlist_id,
+            "playlist_name": playlist_name,
+            "source_platform": source_platform,
+            "collection_metadata": collection_metadata or {}
+        }
         if user_id:
             payload["user_id"] = user_id
         
@@ -92,6 +115,7 @@ class SupabaseDB:
                 "session_id": s["out_session_id"],
                 "created_at": s["out_created_at"],
                 "primary_artist": s["out_primary_artist"],
+                "display_name": s.get("out_playlist_name") or s["out_primary_artist"],
                 "song_count": s["out_song_count"],
                 "comparison_count": s["out_comparison_count"],
                 "convergence_score": s.get("out_convergence_score", 0),

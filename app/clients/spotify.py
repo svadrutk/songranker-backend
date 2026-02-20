@@ -4,7 +4,7 @@ import time
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.utils import normalize_title, DELUXE_KEYWORDS, SKIP_KEYWORDS, get_type_priority
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 class SpotifyClient:
     def __init__(self):
@@ -52,7 +52,12 @@ class SpotifyClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=30),
-        retry=retry_if_exception_type(httpx.HTTPStatusError)
+        # Only retry on transient server errors (5xx, 429). Never retry 4xx client errors.
+        retry=retry_if_exception(
+            lambda e: isinstance(e, httpx.HTTPStatusError)
+                      and (e.response.status_code == 429 or e.response.status_code >= 500)
+        ),
+        reraise=True,
     )
     async def _get_request(
         active_client: httpx.AsyncClient, 
@@ -213,6 +218,62 @@ class SpotifyClient:
             url = data.get("next")
             
         return self._clean_tracks(all_tracks)
+
+    async def get_playlist_tracks(self, playlist_id: str, limit: int = 100, client: Optional[httpx.AsyncClient] = None) -> List[Dict[str, Any]]:
+        """Fetch tracks from a public Spotify playlist."""
+        all_tracks = []
+        url = f"/playlists/{playlist_id}/tracks"
+        # Use fields to minimize payload
+        params = {
+            "fields": "items(track(name,external_ids,popularity,artists(name),duration_ms,album(images),id)),total,next",
+            "limit": 100, 
+            "market": "US"
+        }
+        
+        while url and len(all_tracks) < limit:
+            if url.startswith(self.base_url):
+                endpoint = url.replace(self.base_url, "")
+            else:
+                endpoint = url
+                
+            data = await self._get(endpoint, params=params if not all_tracks else None, client=client)
+            items = data.get("items", [])
+            
+            for item in items:
+                track = item.get("track")
+                if not track:
+                    continue
+                
+                # Check for local files or unavailable tracks
+                if not track.get("name") or not track.get("artists"):
+                    continue
+                
+                all_tracks.append({
+                    "name": track["name"],
+                    "artist": track["artists"][0]["name"],
+                    "isrc": track.get("external_ids", {}).get("isrc"),
+                    "popularity": track.get("popularity", 0),
+                    "duration_ms": track.get("duration_ms", 0),
+                    "cover_url": track["album"]["images"][0]["url"] if track.get("album", {}).get("images") else None,
+                    "spotify_id": track.get("id"),
+                    "genres": [] # Spotify playlist tracks don't directly return genres, would need artist fetch
+                })
+                
+                if len(all_tracks) >= limit:
+                    break
+            
+            url = data.get("next")
+            
+        return all_tracks
+
+    async def get_playlist_metadata(self, playlist_id: str, client: Optional[httpx.AsyncClient] = None) -> Dict[str, Any]:
+        """Fetch playlist metadata (name, owner, images)."""
+        data = await self._get(f"/playlists/{playlist_id}", params={"fields": "name,owner,images"}, client=client)
+        return {
+            "name": data.get("name"),
+            "owner": data.get("owner", {}).get("display_name"),
+            "image_url": data.get("images", [{}])[0].get("url") if data.get("images") else None
+        }
 
     def _clean_tracks(self, tracks: List[Dict[str, Any]]) -> List[str]:
         cleaned = []

@@ -6,7 +6,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.core.limiter import limiter
-from app.api.v1 import search, sessions, image_generation, leaderboard, feedback
+from app.api.v1 import search, sessions, image_generation, leaderboard, feedback, imports
 from app.core.config import settings
 
 import logging
@@ -52,6 +52,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.include_router(search.router, tags=["search"])
 app.include_router(sessions.router, tags=["sessions"])
+app.include_router(imports.router, tags=["imports"])
 app.include_router(image_generation.router, tags=["image-generation"])
 app.include_router(leaderboard.router, tags=["leaderboard"])
 app.include_router(feedback.router, tags=["feedback"])
