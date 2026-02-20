@@ -3,8 +3,10 @@ from pydantic import BaseModel, UUID4
 from typing import Optional
 from app.clients.spotify import spotify_client
 from app.schemas.session import SessionCreate, SongInput, SessionResponse
+from app.core.track_selection import select_anchor_variance_quick_rank
 import re
 import logging
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +16,7 @@ class PlaylistImportRequest(BaseModel):
     url: str
     user_id: Optional[UUID4] = None
     limit: Optional[int] = None
+    rank_mode: Optional[str] = "quick_rank"  # quick_rank | rank_all
 
 def extract_spotify_playlist_id(url: str) -> Optional[str]:
     """Extract playlist ID from a Spotify URL."""
@@ -35,14 +38,27 @@ async def import_playlist(
     try:
         # 1. Fetch metadata and tracks
         metadata = await spotify_client.get_playlist_metadata(playlist_id)
-        
-        # Decide limit: default to Top 40, but if explicit or Rank All toggle logic needed
-        # For now, if no limit provided, use the 40-song default from the plan
-        request_limit = import_data.limit or 40
-        tracks = await spotify_client.get_playlist_tracks(playlist_id, limit=request_limit)
+
+        rank_mode = (import_data.rank_mode or "quick_rank").strip().lower()
+        if rank_mode not in ("quick_rank", "rank_all"):
+            raise HTTPException(status_code=400, detail={
+                "code": "INVALID_RANK_MODE",
+                "message": "rank_mode must be 'quick_rank' or 'rank_all'"
+            })
+
+        if rank_mode == "rank_all":
+            request_limit = min(int(import_data.limit or 250), 250)
+            tracks = await spotify_client.get_playlist_tracks(playlist_id, limit=request_limit)
+        else:
+            # Quick rank: fetch a larger pool for anchor/variance selection.
+            pool = await spotify_client.get_playlist_tracks(playlist_id, limit=250)
+            tracks = select_anchor_variance_quick_rank(pool, anchors=30, wildcards=20, seed=playlist_id)
         
         if not tracks:
-            raise HTTPException(status_code=404, detail="No rankable tracks found in playlist")
+            raise HTTPException(status_code=404, detail={
+                "code": "SPOTIFY_PLAYLIST_NO_RANKABLE_TRACKS",
+                "message": "No rankable tracks found in playlist"
+            })
         
         # 2. Map to SongInput
         songs = [
@@ -65,7 +81,9 @@ async def import_playlist(
             source_platform="spotify",
             collection_metadata={
                 "owner": metadata["owner"],
-                "image_url": metadata["image_url"]
+                "image_url": metadata["image_url"],
+                "rank_mode": rank_mode,
+                "quick_rank_strategy": "anchor_variance_30_20" if rank_mode == "quick_rank" else None,
             },
             songs=songs
         )
@@ -76,8 +94,21 @@ async def import_playlist(
         
     except HTTPException:
         raise
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code if e.response else 500
+        if status == 404:
+            raise HTTPException(status_code=404, detail={
+                "code": "SPOTIFY_PLAYLIST_NOT_FOUND_OR_PRIVATE",
+                "message": "Playlist not found or is private"
+            })
+        raise HTTPException(status_code=502, detail={
+            "code": "SPOTIFY_API_ERROR",
+            "message": "Spotify API request failed",
+            "status": status
+        })
     except Exception as e:
         logger.error(f"Failed to import playlist {playlist_id}: {e}")
-        if "404" in str(e):
-            raise HTTPException(status_code=404, detail="Playlist not found or is private")
-        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "code": "IMPORT_FAILED",
+            "message": "Import failed"
+        })

@@ -97,9 +97,11 @@ The system currently groups songs and comparisons by `artist`. We will introduce
 - **Estimated Effort**: Small
 
 #### Phase 3: "Fast Path" Import API
-- Create `POST /v1/imports/playlist` endpoint.
-- Logic: Fetch -> Filter (Unavailable/Duplicates) -> Bulk Upsert Songs -> Create Session.
-- Implement "Quick Rank" (Top 50) logic.
+- [x] Create `POST /v1/imports/playlist` endpoint.
+- [x] Logic: Fetch -> Filter (Unavailable/Duplicates) -> Bulk Upsert Songs -> Create Session.
+- [x] Implement "Quick Rank" (Top 50) logic (Anchor & Variance: 30 high-popularity + 20 random wildcards).
+- [x] Add `rank_mode` parameter (`quick_rank` | `rank_all`, cap 250).
+- [x] Private/missing playlist returns structured 404 (`SPOTIFY_PLAYLIST_NOT_FOUND_OR_PRIVATE`).
 - **Estimated Effort**: Medium
 
 #### Phase 4: Viral Share & Polishing
@@ -112,14 +114,14 @@ The system currently groups songs and comparisons by `artist`. We will introduce
 ### Functional Requirements
 - [x] Users can paste a Spotify playlist URL and see a preview (Name, Count, Covers).
 - [x] "No-Login" flow successfully fetches tracks for public Spotify playlists.
-- [ ] "Quick Rank" correctly selects the Top 40 tracks for high-intent ranking sessions.
+- [x] "Quick Rank" correctly selects the Top 50 tracks for high-intent ranking sessions (30 anchors + 20 wildcards).
 - [ ] Ranking UI displays the correct Artist/Title for each song in multi-artist sessions.
 - [ ] Users can generate and download a "Receipt" share card upon completing a ranking.
 
 ### Non-Functional Requirements
 - [ ] **Performance**: Playlist fetch and session creation should take < 3 seconds for 100 tracks.
-- [ ] **Resilience**: Handle 404 (Private) Spotify playlists with a clear error message and "How to make public" guide.
-- [ ] **Scalability**: Cap "Rank All" at 250 tracks to prevent browser/DB performance degradation.
+- [x] **Resilience**: Handle 404 (Private) Spotify playlists with a clear error message and "How to make public" guide.
+- [x] **Scalability**: Cap "Rank All" at 250 tracks to prevent browser/DB performance degradation.
 
 ## Risk Analysis & Mitigation
 - **Risk**: Spotify Rate Limits (429 errors).

@@ -4,7 +4,7 @@ import time
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.utils import normalize_title, DELUXE_KEYWORDS, SKIP_KEYWORDS, get_type_priority
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 class SpotifyClient:
     def __init__(self):
@@ -52,7 +52,12 @@ class SpotifyClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=30),
-        retry=retry_if_exception_type(httpx.HTTPStatusError)
+        # Only retry on transient server errors (5xx, 429). Never retry 4xx client errors.
+        retry=retry_if_exception(
+            lambda e: isinstance(e, httpx.HTTPStatusError)
+                      and (e.response.status_code == 429 or e.response.status_code >= 500)
+        ),
+        reraise=True,
     )
     async def _get_request(
         active_client: httpx.AsyncClient, 
