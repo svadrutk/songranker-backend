@@ -210,10 +210,15 @@ async def create_session(request: Request, session_data: SessionCreate, backgrou
         unique_songs = {}
         for s in session_data.songs:
             norm_name = normalize_title(s.name)
-            key = (s.artist.lower(), norm_name)
             
-            # Keep the one with more metadata (Spotify ID or Album)
-            score = sum(1 for field in (s.spotify_id, s.album) if field)
+            # Use ISRC as primary key if available, fallback to (artist, norm_name)
+            if s.isrc:
+                key = f"isrc:{s.isrc}"
+            else:
+                key = (s.artist.lower(), norm_name)
+            
+            # Keep the one with more metadata
+            score = sum(1 for field in (s.spotify_id, s.album, s.isrc) if field)
             existing_data = unique_songs.get(key)
             if not existing_data or score > existing_data["score"]:
                 unique_songs[key] = {
@@ -229,6 +234,8 @@ async def create_session(request: Request, session_data: SessionCreate, backgrou
                 "album": item["song"].album,
                 "normalized_name": item["normalized_name"],
                 "spotify_id": item["song"].spotify_id,
+                "isrc": item["song"].isrc,
+                "genres": item["song"].genres,
                 "cover_url": item["song"].cover_url
             }
             for item in unique_songs.values()
@@ -238,13 +245,17 @@ async def create_session(request: Request, session_data: SessionCreate, backgrou
             raise HTTPException(status_code=400, detail="No songs provided")
 
         # 2. Bulk upsert songs to global catalog
-        # This ensures we have IDs for all songs, reusing existing ones if they match (artist, normalized_name)
+        # This ensures we have IDs for all songs, reusing existing ones if they match ISRC or (artist, normalized_name)
         resolved_songs = await supabase_client.bulk_upsert_songs(prepared_songs)
         song_ids = [s["id"] for s in resolved_songs]
 
         # 3. Create the session
         session_id = await supabase_client.create_session(
-            user_id=str(session_data.user_id) if session_data.user_id else None
+            user_id=str(session_data.user_id) if session_data.user_id else None,
+            playlist_id=session_data.playlist_id,
+            playlist_name=session_data.playlist_name,
+            source_platform=session_data.source_platform,
+            collection_metadata=session_data.collection_metadata
         )
 
         # 4. Link songs to session
