@@ -30,7 +30,19 @@ async def lifespan(app: FastAPI):
         headers={"User-Agent": settings.MUSICBRAINZ_USER_AGENT},
         limits=limits
     )
-    
+
+    # Apple Music credential validation
+    if settings.apple_music_configured:
+        logger.info(
+            f"Apple Music integration enabled "
+            f"(team={settings.APPLE_MUSIC_TEAM_ID}, key={settings.APPLE_MUSIC_KEY_ID})"
+        )
+    else:
+        logger.warning(
+            "Apple Music integration disabled. "
+            "Set APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID, and APPLE_MUSIC_PRIVATE_KEY_B64 to enable."
+        )
+
     yield
     
     # Teardown

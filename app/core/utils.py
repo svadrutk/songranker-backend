@@ -22,9 +22,20 @@ DELUXE_KEYWORDS = [
 
 SKIP_KEYWORDS = ["karaoke", "instrumental", "tour", "live", "sessions", "demos", "remixes", "remix"]
 
+_SPOTIFY_ID_RE = re.compile(r'^(?=.*[A-Za-z])[A-Za-z0-9]{22}$')
+
 def is_spotify_id(resource_id: str) -> bool:
-    """Check if the ID looks like a Spotify ID (22 chars, alphanumeric)."""
-    return len(resource_id) == 22 and "-" not in resource_id and ":" not in resource_id
+    """Check if the ID looks like a Spotify ID (22 Base62 chars with at least one letter).
+
+    The lookahead (?=.*[A-Za-z]) prevents a 22-digit Apple Music ID from being
+    misrouted to Spotify — Apple Music catalog IDs are pure numeric strings.
+    """
+    return bool(_SPOTIFY_ID_RE.match(resource_id))
+
+
+def is_apple_music_id(resource_id: str) -> bool:
+    """Check if the ID looks like an Apple Music catalog ID (pure numeric string)."""
+    return resource_id.isdigit()
 
 _PARENT_PATTERN = re.compile(r'[\(\[\{].*?[\)\]\}]')
 _NON_ALPHANUM_PATTERN = re.compile(r'[^a-z0-9]')

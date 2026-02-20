@@ -9,7 +9,8 @@ import re
 from app.clients.musicbrainz import musicbrainz_client
 from app.clients.lastfm import lastfm_client
 from app.clients.spotify import spotify_client
-from app.core.utils import normalize_title, is_spotify_id, DELUXE_KEYWORDS, SKIP_KEYWORDS
+from app.clients.apple_music import apple_music_client
+from app.core.utils import normalize_title, is_spotify_id, is_apple_music_id, DELUXE_KEYWORDS, SKIP_KEYWORDS
 from app.core.cache import cache
 from app.core.limiter import limiter
 from app.core.config import settings
@@ -171,9 +172,35 @@ async def search(request: Request, background_tasks: BackgroundTasks, query: str
     if not norm_query:
         return []
 
-    # 2. FAST PATH: Spotify
-    # If credentials are present, use Spotify as the primary search engine.
-    # It is faster (200ms vs 1s+) and handles typos natively.
+    # 2. FAST PATH 1: Apple Music (primary)
+    # 6-hour TTL — Apple Music catalog is very stable
+    if settings.apple_music_configured:
+        try:
+            cache_key = f"am_search:{norm_query}"
+            results = await cache.get_or_fetch(
+                cache_key,
+                lambda: apple_music_client.search_artist_albums(query),
+                ttl_seconds=21600,
+                swr_ttl_seconds=86400,
+                background_tasks=background_tasks,
+            )
+            if results:
+                return results
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                logger.error(
+                    "Apple Music JWT rejected (401). Check APPLE_MUSIC_TEAM_ID, "
+                    "APPLE_MUSIC_KEY_ID, and APPLE_MUSIC_PRIVATE_KEY_B64. "
+                    "Falling back to Spotify."
+                )
+            else:
+                logger.warning(
+                    f"Apple Music search failed ({e.response.status_code}), falling back to Spotify."
+                )
+        except Exception as e:
+            logger.warning(f"Apple Music search error: {e}, falling back to Spotify.")
+
+    # 2b. FAST PATH 2: Spotify (secondary fast path)
     if settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET:
         cache_key = f"spotify_search:{norm_query}"
         results = await cache.get_or_fetch(
@@ -214,19 +241,28 @@ async def search(request: Request, background_tasks: BackgroundTasks, query: str
     return results
 
 async def _get_artist_suggestions(query: str, client: httpx.AsyncClient) -> List[Dict[str, str]]:
-    """Get artist name suggestions from Spotify or Last.fm."""
-    # 1. Try Spotify first if available
+    """Get artist name suggestions from Apple Music, Spotify, or Last.fm (in priority order)."""
+    # 1. Apple Music (primary)
+    if settings.apple_music_configured:
+        try:
+            search_res = await apple_music_client.search_artists_only(query)
+            logger.info(f"[suggest] Apple Music returned {len(search_res) if search_res else 0} names for query={query!r}")
+            if search_res:
+                return [{"name": name} for name in search_res[:5]]
+        except Exception as e:
+            logger.warning(f"Apple Music suggestion failed: {e}")
+
+    # 2. Spotify (secondary)
     if settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET:
         try:
-            # We use a lightweight search for artists only
             search_res = await spotify_client.search_artists_only(query)
             logger.info(f"[suggest] Spotify returned {len(search_res) if search_res else 0} names for query={query!r}")
             if search_res:
                 return [{"name": name} for name in search_res[:5]]
         except Exception as e:
-            logger.error(f"Spotify suggestion failed: {e}")
+            logger.warning(f"Spotify suggestion failed: {e}")
 
-    # 2. Fallback to Last.fm
+    # 3. Fallback to Last.fm
     try:
         artists = await lastfm_client.search_artist(query, client=client)
         return [{"name": a["name"]} for a in artists[:5]]
@@ -310,8 +346,13 @@ async def get_tracks(
     
     async def fetch_tracks() -> Optional[List[str]]:
         logger.info(f"Starting fetch_tracks for {release_group_id}")
-        
-        # 1. Fast Path: Spotify ID Detection
+
+        # 1a. Fast Path: Apple Music ID (pure numeric string)
+        if is_apple_music_id(release_group_id):
+            logger.info(f"Apple Music ID detected: {release_group_id}")
+            return await apple_music_client.get_album_tracks(release_group_id)
+
+        # 1b. Fast Path: Spotify ID (22 Base62 chars with at least one letter)
         if is_spotify_id(release_group_id):
              logger.info(f"Spotify ID detected: {release_group_id}")
              if artist and title:

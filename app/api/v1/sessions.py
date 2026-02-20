@@ -218,7 +218,7 @@ async def create_session(request: Request, session_data: SessionCreate, backgrou
                 key = (s.artist.lower(), norm_name)
             
             # Keep the one with more metadata
-            score = sum(1 for field in (s.spotify_id, s.album, s.isrc) if field)
+            score = sum(1 for field in (s.spotify_id, getattr(s, "apple_music_id", None), s.album, s.isrc) if field)
             existing_data = unique_songs.get(key)
             if not existing_data or score > existing_data["score"]:
                 unique_songs[key] = {
@@ -234,6 +234,7 @@ async def create_session(request: Request, session_data: SessionCreate, backgrou
                 "album": item["song"].album,
                 "normalized_name": item["normalized_name"],
                 "spotify_id": item["song"].spotify_id,
+                "apple_music_id": getattr(item["song"], "apple_music_id", None),
                 "isrc": item["song"].isrc,
                 "genres": item["song"].genres,
                 "cover_url": item["song"].cover_url

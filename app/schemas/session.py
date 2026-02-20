@@ -7,6 +7,7 @@ class SongInput(BaseModel):
     artist: str
     album: Optional[str] = None
     spotify_id: Optional[str] = None
+    apple_music_id: Optional[str] = None
     isrc: Optional[str] = None
     genres: List[str] = Field(default_factory=list)
     cover_url: Optional[str] = None
@@ -39,6 +40,7 @@ class SessionSong(BaseModel):
     artist: Optional[str] = "Unknown Artist"
     album: Optional[str] = None
     spotify_id: Optional[str] = None
+    apple_music_id: Optional[str] = None
     isrc: Optional[str] = None
     genres: List[str] = Field(default_factory=list)
     cover_url: Optional[str] = None
