@@ -7,6 +7,7 @@ class SongInput(BaseModel):
     artist: str
     album: Optional[str] = None
     spotify_id: Optional[str] = None
+    apple_music_id: Optional[str] = None
     isrc: Optional[str] = None
     genres: List[str] = Field(default_factory=list)
     cover_url: Optional[str] = None
@@ -22,6 +23,8 @@ class SessionCreate(BaseModel):
 class SessionResponse(BaseModel):
     session_id: UUID4
     count: int
+    playlist_name: Optional[str] = None
+    image_url: Optional[str] = None
 
 class SessionSummary(BaseModel):
     session_id: UUID4
@@ -39,6 +42,7 @@ class SessionSong(BaseModel):
     artist: Optional[str] = "Unknown Artist"
     album: Optional[str] = None
     spotify_id: Optional[str] = None
+    apple_music_id: Optional[str] = None
     isrc: Optional[str] = None
     genres: List[str] = Field(default_factory=list)
     cover_url: Optional[str] = None
@@ -54,6 +58,9 @@ class ComparisonPair(BaseModel):
 
 class SessionDetail(BaseModel):
     session_id: UUID4
+    playlist_id: Optional[str] = None
+    playlist_name: Optional[str] = None
+    image_url: Optional[str] = None
     songs: List[SessionSong]
     comparison_count: int
     convergence_score: Optional[int] = None

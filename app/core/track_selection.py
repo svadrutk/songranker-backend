@@ -16,8 +16,9 @@ def _track_key(track: Dict[str, Any]) -> Tuple[str, str]:
     """Key for deduping tracks before quick-rank selection.
 
     Priority:
-    - ISRC (best cross-release identifier)
+    - ISRC (best cross-release / cross-platform identifier)
     - Spotify track ID
+    - Apple Music catalog ID
     - (normalized title, lowercased primary artist)
     """
     isrc = track.get("isrc")
@@ -27,6 +28,10 @@ def _track_key(track: Dict[str, Any]) -> Tuple[str, str]:
     spotify_id = track.get("spotify_id")
     if spotify_id:
         return ("spotify_id", str(spotify_id))
+
+    apple_music_id = track.get("apple_music_id")
+    if apple_music_id:
+        return ("apple_music_id", str(apple_music_id))
 
     name = normalize_title(str(track.get("name") or ""))
     artist = str(track.get("artist") or "").lower()

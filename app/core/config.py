@@ -1,3 +1,4 @@
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -15,6 +16,14 @@ class Settings(BaseSettings):
     # Spotify
     SPOTIFY_CLIENT_ID: str = ""
     SPOTIFY_CLIENT_SECRET: str = ""
+
+    # Apple Music
+    APPLE_MUSIC_TEAM_ID: str = ""
+    APPLE_MUSIC_KEY_ID: str = ""
+    # Store .p8 content as BASE64 (single-line).
+    # Encode with: base64 -i AuthKey_xxx.p8 | tr -d '\n'
+    APPLE_MUSIC_PRIVATE_KEY_B64: SecretStr = SecretStr("")
+    APPLE_MUSIC_STOREFRONT: str = "us"
     
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -31,6 +40,26 @@ class Settings(BaseSettings):
     @property
     def effective_supabase_key(self) -> str:
         return self.SUPABASE_SERVICE_ROLE_KEY or self.SUPABASE_PUBLIC_ANON_KEY
+
+    @property
+    def apple_music_configured(self) -> bool:
+        """True only when all three Apple Music credential fields are non-empty and the key is valid."""
+        if not (
+            self.APPLE_MUSIC_TEAM_ID.strip()
+            and self.APPLE_MUSIC_KEY_ID.strip()
+            and self.APPLE_MUSIC_PRIVATE_KEY_B64.get_secret_value().strip()
+        ):
+            return False
+        # Validate the decoded key parses as a valid EC P-256 private key
+        try:
+            import base64
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+            from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey, SECP256R1
+            raw = base64.b64decode(self.APPLE_MUSIC_PRIVATE_KEY_B64.get_secret_value())
+            key = load_pem_private_key(raw, password=None)
+            return isinstance(key, EllipticCurvePrivateKey) and isinstance(key.curve, SECP256R1)
+        except Exception:
+            return False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

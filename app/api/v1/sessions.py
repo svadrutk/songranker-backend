@@ -45,8 +45,12 @@ async def get_session_detail(session_id: UUID):
             supabase_client.get_session_details(str(session_id)),
             supabase_client.get_session_comparison_pairs(str(session_id))
         )
+        collection_meta = details.get("collection_metadata") or {}
         return SessionDetail(
             session_id=session_id,
+            playlist_id=details.get("playlist_id"),
+            playlist_name=details.get("playlist_name"),
+            image_url=collection_meta.get("image_url"),
             songs=[SessionSong(**s) for s in songs],
             comparison_count=count,
             convergence_score=details.get("convergence_score"),
@@ -218,7 +222,7 @@ async def create_session(request: Request, session_data: SessionCreate, backgrou
                 key = (s.artist.lower(), norm_name)
             
             # Keep the one with more metadata
-            score = sum(1 for field in (s.spotify_id, s.album, s.isrc) if field)
+            score = sum(1 for field in (s.spotify_id, getattr(s, "apple_music_id", None), s.album, s.isrc) if field)
             existing_data = unique_songs.get(key)
             if not existing_data or score > existing_data["score"]:
                 unique_songs[key] = {
@@ -234,6 +238,7 @@ async def create_session(request: Request, session_data: SessionCreate, backgrou
                 "album": item["song"].album,
                 "normalized_name": item["normalized_name"],
                 "spotify_id": item["song"].spotify_id,
+                "apple_music_id": getattr(item["song"], "apple_music_id", None),
                 "isrc": item["song"].isrc,
                 "genres": item["song"].genres,
                 "cover_url": item["song"].cover_url
@@ -266,7 +271,9 @@ async def create_session(request: Request, session_data: SessionCreate, backgrou
 
         return SessionResponse(
             session_id=UUID(session_id),
-            count=len(song_ids)
+            count=len(song_ids),
+            playlist_name=session_data.playlist_name,
+            image_url=session_data.collection_metadata.get("image_url") if session_data.collection_metadata else None
         )
 
     except Exception as e:

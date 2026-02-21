@@ -72,9 +72,14 @@ async def deep_deduplicate_session(session_id: str):
         logger.error(f"Error during deep deduplication for session {session_id}: {e}")
 
 def _decide_canonical(song_a: Dict[str, Any], song_b: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
-    """Decide which song to keep as the canonical version based on Spotify ID, Album, and name length."""
-    def get_score(s):
-        return sum(1 for field in ("spotify_id", "album") if s.get(field))
+    """Decide which song to keep as the canonical version.
+
+    Scoring: spotify_id and apple_music_id are weighted equally (both are
+    platform-specific catalog links). album presence adds metadata richness.
+    Tie-break: shorter name (less likely to be a variant title).
+    """
+    def get_score(s: Dict[str, Any]) -> int:
+        return sum(1 for field in ("spotify_id", "apple_music_id", "album") if s.get(field))
 
     score_a, score_b = get_score(song_a), get_score(song_b)
 

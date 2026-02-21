@@ -22,6 +22,8 @@ dependencies = [
     "tenacity>=9.0.0",
     "choix>=0.4.1",
     "pillow>=12.1.1",
+    "PyJWT[crypto]>=2.10.1",
+    "cryptography>=46.0.0",
 ]
 
 [dependency-groups]
