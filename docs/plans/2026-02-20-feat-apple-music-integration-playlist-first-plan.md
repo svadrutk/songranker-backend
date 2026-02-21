@@ -1,7 +1,7 @@
 ---
 title: Apple Music Integration & Playlist-First Reboot
 type: feat
-status: active
+status: completed
 date: 2026-02-20
 supersedes:
   - docs/plans/2026-02-17-feat-switch-primary-metadata-source-to-apple-music-plan.md

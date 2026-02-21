@@ -112,20 +112,32 @@ async def import_playlist(
     # ------------------------------------------------------------------
     # 2. Fetch metadata and tracks in parallel
     # ------------------------------------------------------------------
+    # Increase default limit for 'rank_all' mode, but keep a reasonable safety cap
+    MAX_IMPORT_LIMIT = 500
+    
     try:
+        # Fetch logic: 
+        # - If 'rank_all' and no limit, fetch up to safety cap.
+        # - If 'quick_rank', we want to fetch a larger pool (MAX_IMPORT_LIMIT) 
+        #   so the selection algorithm has more tracks to pick from, even 
+        #   if we only return 50.
+        if rank_mode == "quick_rank":
+            fetch_limit = MAX_IMPORT_LIMIT
+        else:
+            fetch_limit = min(int(import_data.limit or MAX_IMPORT_LIMIT), MAX_IMPORT_LIMIT)
+
         if platform == "apple_music":
             assert storefront is not None
-            fetch_limit = min(int(import_data.limit or 250), 250)
             metadata, raw_tracks = await asyncio.gather(
                 apple_music_client.get_playlist_metadata(playlist_id, storefront),
                 apple_music_client.get_playlist_tracks(playlist_id, storefront, limit=fetch_limit),
             )
         else:
-            fetch_limit = min(int(import_data.limit or 250), 250)
             metadata, raw_tracks = await asyncio.gather(
                 spotify_client.get_playlist_metadata(playlist_id, client=http_client),
                 spotify_client.get_playlist_tracks(playlist_id, limit=fetch_limit, client=http_client),
             )
+        logger.info(f"Importing {platform} playlist '{metadata.get('name')}' ({playlist_id}) with {len(raw_tracks)} raw tracks.")
     except HTTPException:
         raise
     except httpx.HTTPStatusError as e:
@@ -175,12 +187,15 @@ async def import_playlist(
     # 5. Select tracks per rank_mode
     # ------------------------------------------------------------------
     if rank_mode == "quick_rank":
+        # If user explicitly asked for 50, or no limit specified but in quick_rank mode
+        # we use the 30/20 strategy.
         selected_dicts = select_anchor_variance_quick_rank(
             deduped_dicts, anchors=30, wildcards=20, seed=playlist_id
         )
         quick_rank_strategy = "anchor_variance_30_20"
     else:
-        selected_dicts = deduped_dicts[:250]
+        # 'rank_all' mode takes up to our safety cap
+        selected_dicts = deduped_dicts[:MAX_IMPORT_LIMIT]
         quick_rank_strategy = None
 
     songs = [SongInput(**d) for d in selected_dicts]

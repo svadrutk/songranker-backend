@@ -1,10 +1,15 @@
 import httpx
 import base64
 import time
+import re
+import json
+import logging
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.utils import normalize_title, DELUXE_KEYWORDS, SKIP_KEYWORDS, get_type_priority
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+
+logger = logging.getLogger(__name__)
 
 class SpotifyClient:
     def __init__(self):
@@ -220,60 +225,193 @@ class SpotifyClient:
         return self._clean_tracks(all_tracks)
 
     async def get_playlist_tracks(self, playlist_id: str, limit: int = 100, client: Optional[httpx.AsyncClient] = None) -> List[Dict[str, Any]]:
-        """Fetch tracks from a public Spotify playlist."""
+        """Fetch tracks from a public Spotify playlist with fallback for curated playlists."""
         all_tracks = []
         url = f"/playlists/{playlist_id}/tracks"
-        # Use fields to minimize payload
         params = {
             "fields": "items(track(name,external_ids,popularity,artists(name),duration_ms,album(images),id)),total,next",
             "limit": 100, 
             "market": "US"
         }
         
-        while url and len(all_tracks) < limit:
-            if url.startswith(self.base_url):
-                endpoint = url.replace(self.base_url, "")
-            else:
-                endpoint = url
+        try:
+            while url and len(all_tracks) < limit:
+                if url.startswith(self.base_url):
+                    endpoint = url.replace(self.base_url, "")
+                else:
+                    endpoint = url
+                    
+                data = await self._get(endpoint, params=params if not all_tracks else None, client=client)
+                items = data.get("items", [])
                 
-            data = await self._get(endpoint, params=params if not all_tracks else None, client=client)
-            items = data.get("items", [])
+                for item in items:
+                    track = item.get("track")
+                    if not track: continue
+                    if not track.get("name") or not track.get("artists"): continue
+                    
+                    all_tracks.append({
+                        "name": track["name"],
+                        "artist": track["artists"][0]["name"],
+                        "isrc": track.get("external_ids", {}).get("isrc"),
+                        "popularity": track.get("popularity", 0),
+                        "duration_ms": track.get("duration_ms", 0),
+                        "cover_url": track["album"]["images"][0]["url"] if track.get("album", {}).get("images") else None,
+                        "spotify_id": track.get("id"),
+                        "genres": []
+                    })
+                    if len(all_tracks) >= limit: break
+                url = data.get("next")
+            return all_tracks
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.info(f"Standard API 404 for playlist {playlist_id}. Attempting embed fallback.")
+                return await self._fetch_tracks_from_embed(playlist_id, limit=limit, client=client)
+            raise
+
+    async def _fetch_tracks_from_embed(self, playlist_id: str, limit: int = 100, client: Optional[httpx.AsyncClient] = None) -> List[Dict[str, Any]]:
+        """Scrape track IDs from the Spotify embed page and fetch details in bulk."""
+        active_client = client or await self.get_client()
+        embed_url = f"https://open.spotify.com/embed/playlist/{playlist_id}"
+        
+        try:
+            resp = await active_client.get(embed_url)
+            resp.raise_for_status()
             
-            for item in items:
-                track = item.get("track")
-                if not track:
-                    continue
+            # Extract JSON blob from the script tag
+            # Pattern matches the large props object in the embed HTML
+            match = re.search(r'\{"props":.*\}', resp.text)
+            if not match:
+                logger.error(f"Could not find JSON data in embed page for {playlist_id}")
+                return []
                 
-                # Check for local files or unavailable tracks
-                if not track.get("name") or not track.get("artists"):
-                    continue
-                
-                all_tracks.append({
-                    "name": track["name"],
-                    "artist": track["artists"][0]["name"],
-                    "isrc": track.get("external_ids", {}).get("isrc"),
-                    "popularity": track.get("popularity", 0),
-                    "duration_ms": track.get("duration_ms", 0),
-                    "cover_url": track["album"]["images"][0]["url"] if track.get("album", {}).get("images") else None,
-                    "spotify_id": track.get("id"),
-                    "genres": [] # Spotify playlist tracks don't directly return genres, would need artist fetch
-                })
-                
-                if len(all_tracks) >= limit:
-                    break
+            data = json.loads(match.group(0))
+            entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+            track_list = entity.get("trackList", [])
             
-            url = data.get("next")
+            if not track_list:
+                logger.warning(f"No tracks found in embed JSON for {playlist_id}")
+                return []
+                
+            logger.info(f"Scraper found playlist '{entity.get('name')}' with {len(track_list)} tracks.")
+                
+            # Extract track IDs (limit to requested amount)
+            track_ids = []
+            for item in track_list[:limit]:
+                uri = item.get("uri", "")
+                if "spotify:track:" in uri:
+                    track_ids.append(uri.split(":")[-1])
             
-        return all_tracks
+            if not track_ids:
+                return []
+                
+            # Fetch full details in bulk (Track API still works with Client Credentials!)
+            return await self._get_bulk_tracks(track_ids, client=active_client)
+            
+        except Exception as e:
+            logger.error(f"Embed fallback failed for {playlist_id}: {e}")
+            return []
+
+    async def _get_bulk_tracks(self, track_ids: List[str], client: httpx.AsyncClient) -> List[Dict[str, Any]]:
+        """Fetch track details in batches of 50 using the /tracks API."""
+        all_details = []
+        for i in range(0, len(track_ids), 50):
+            batch = track_ids[i:i+50]
+            ids_str = ",".join(batch)
+            try:
+                data = await self._get("/tracks", params={"ids": ids_str, "market": "US"}, client=client)
+                tracks = data.get("tracks", [])
+                for track in tracks:
+                    if not track: continue
+                    all_details.append({
+                        "name": track["name"],
+                        "artist": track["artists"][0]["name"],
+                        "isrc": track.get("external_ids", {}).get("isrc"),
+                        "popularity": track.get("popularity", 0),
+                        "duration_ms": track.get("duration_ms", 0),
+                        "cover_url": track["album"]["images"][0]["url"] if track.get("album", {}).get("images") else None,
+                        "spotify_id": track.get("id"),
+                        "genres": []
+                    })
+            except Exception as e:
+                logger.error(f"Error fetching bulk tracks: {e}")
+                
+        return all_details
 
     async def get_playlist_metadata(self, playlist_id: str, client: Optional[httpx.AsyncClient] = None) -> Dict[str, Any]:
-        """Fetch playlist metadata (name, owner, images)."""
-        data = await self._get(f"/playlists/{playlist_id}", params={"fields": "name,owner,images"}, client=client)
-        return {
-            "name": data.get("name"),
-            "owner": data.get("owner", {}).get("display_name"),
-            "image_url": data.get("images", [{}])[0].get("url") if data.get("images") else None
-        }
+        """Fetch playlist metadata (name, owner, images) with fallbacks."""
+        try:
+            data = await self._get(f"/playlists/{playlist_id}", params={"fields": "name,owner,images"}, client=client)
+            return {
+                "name": data.get("name"),
+                "owner": data.get("owner", {}).get("display_name"),
+                "image_url": data.get("images", [{}])[0].get("url") if data.get("images") else None
+            }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.info(f"Metadata API 404 for {playlist_id}. Attempting scraper fallback.")
+                # Try Embed Scraper first for rich metadata
+                embed_metadata = await self._fetch_metadata_from_embed(playlist_id, client=client)
+                if embed_metadata and embed_metadata.get("name") and embed_metadata.get("name") != "Unknown Playlist":
+                    return embed_metadata
+                
+                # Fallback to oEmbed if scraper fails
+                return await self._fetch_metadata_from_oembed(playlist_id, client=client)
+            raise
+
+    async def _fetch_metadata_from_embed(self, playlist_id: str, client: Optional[httpx.AsyncClient] = None) -> Optional[Dict[str, Any]]:
+        """Extract playlist metadata from the embed page HTML/JSON."""
+        active_client = client or await self.get_client()
+        embed_url = f"https://open.spotify.com/embed/playlist/{playlist_id}"
+        
+        try:
+            resp = await active_client.get(embed_url)
+            resp.raise_for_status()
+            
+            match = re.search(r'\{"props":.*\}', resp.text)
+            if not match: return None
+                
+            data = json.loads(match.group(0))
+            entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+            
+            if not entity: return None
+            
+            # Extract image from visualIdentity or coverArt
+            image_url = None
+            viz_images = entity.get("visualIdentity", {}).get("image", [])
+            if viz_images:
+                # Pick largest
+                image_url = viz_images[-1].get("url")
+            elif entity.get("coverArt", {}).get("sources"):
+                image_url = entity["coverArt"]["sources"][0].get("url")
+                
+            return {
+                "name": entity.get("name") or entity.get("title"),
+                "owner": entity.get("subtitle") or "Spotify",
+                "image_url": image_url
+            }
+        except Exception as e:
+            logger.error(f"Embed metadata fallback failed for {playlist_id}: {e}")
+            return None
+
+    async def _fetch_metadata_from_oembed(self, playlist_id: str, client: Optional[httpx.AsyncClient] = None) -> Dict[str, Any]:
+        """Use oEmbed API as a metadata fallback for curated playlists."""
+        active_client = client or await self.get_client()
+        url = "https://open.spotify.com/oembed"
+        params = {"url": f"https://open.spotify.com/playlist/{playlist_id}"}
+        
+        try:
+            resp = await active_client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            return {
+                "name": data.get("title"),
+                "owner": "Spotify", # Curated playlists are owned by Spotify
+                "image_url": data.get("thumbnail_url")
+            }
+        except Exception as e:
+            logger.error(f"oEmbed fallback failed for {playlist_id}: {e}")
+            return {"name": "Unknown Playlist", "owner": "Spotify", "image_url": None}
 
     def _clean_tracks(self, tracks: List[Dict[str, Any]]) -> List[str]:
         cleaned = []
