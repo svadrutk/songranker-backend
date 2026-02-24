@@ -1,4 +1,4 @@
-from pydantic import BaseModel, UUID4, Field
+from pydantic import BaseModel, UUID4, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
 
@@ -11,6 +11,13 @@ class SongInput(BaseModel):
     isrc: Optional[str] = None
     genres: List[str] = Field(default_factory=list)
     cover_url: Optional[str] = None
+
+    @field_validator("genres", mode="before")
+    @classmethod
+    def ensure_list(cls, v):
+        if v is None:
+            return []
+        return v
 
 class SessionCreate(BaseModel):
     user_id: Optional[UUID4] = None
@@ -49,6 +56,13 @@ class SessionSong(BaseModel):
     local_elo: float
     bt_strength: Optional[float] = None
 
+    @field_validator("genres", mode="before")
+    @classmethod
+    def ensure_list(cls, v):
+        if v is None:
+            return []
+        return v
+
 class ComparisonPair(BaseModel):
     """Model for tracking comparisons with outcome info for IDC filtering."""
     song_a_id: UUID4
@@ -58,12 +72,14 @@ class ComparisonPair(BaseModel):
 
 class SessionDetail(BaseModel):
     session_id: UUID4
+    user_id: Optional[UUID4] = None
     playlist_id: Optional[str] = None
     playlist_name: Optional[str] = None
     image_url: Optional[str] = None
     songs: List[SessionSong]
     comparison_count: int
     convergence_score: Optional[int] = None
+    is_owner: bool = False
     comparisons: List[ComparisonPair] = Field(default_factory=list)
 
 class ComparisonCreate(BaseModel):

@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from app.schemas.session import SessionCreate, SessionResponse, SessionSong, ComparisonCreate, ComparisonResponse, SessionSummary, SessionDetail, UndoComparisonResponse, ComparisonPair
 from app.clients.supabase_db import supabase_client
 from app.core.utils import normalize_title, calculate_elo
+from app.core.auth import get_user_id_from_request
 from app.core.queue import task_queue
 from app.tasks import run_deep_deduplication
 from app.core.limiter import limiter
@@ -36,7 +37,7 @@ async def get_user_sessions(user_id: UUID):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
-async def get_session_detail(session_id: UUID):
+async def get_session_detail(session_id: UUID, request: Request):
     """Retrieve session metadata, songs, comparison count, and comparison history."""
     try:
         songs, count, details, comparison_pairs = await asyncio.gather(
@@ -46,14 +47,22 @@ async def get_session_detail(session_id: UUID):
             supabase_client.get_session_comparison_pairs(str(session_id))
         )
         collection_meta = details.get("collection_metadata") or {}
+        session_user_id = details.get("user_id")
+        
+        # Determine ownership
+        caller_user_id = get_user_id_from_request(request)
+        is_owner = bool(caller_user_id and session_user_id and str(caller_user_id) == str(session_user_id))
+        
         return SessionDetail(
             session_id=session_id,
+            user_id=session_user_id,
             playlist_id=details.get("playlist_id"),
             playlist_name=details.get("playlist_name"),
             image_url=collection_meta.get("image_url"),
             songs=[SessionSong(**s) for s in songs],
             comparison_count=count,
             convergence_score=details.get("convergence_score"),
+            is_owner=is_owner,
             comparisons=[ComparisonPair(**c) for c in comparison_pairs]
         )
     except Exception as e:
