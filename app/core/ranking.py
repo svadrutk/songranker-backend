@@ -1,8 +1,6 @@
 import math
 import logging
 from typing import List, Dict, Optional
-import numpy as np
-import choix
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +106,9 @@ class RankingManager:
         if n == 1:
             # Single song has θ = 0 (average strength)
             return {song_ids[0]: 0.0}
+        
+        # Lazy import to reduce memory in web workers
+        import choix
         
         # Map song IDs to indices 0..n-1
         id_to_idx = {sid: i for i, sid in enumerate(song_ids)}
@@ -245,6 +246,9 @@ class RankingManager:
         """
         if not bt_params or len(bt_params) <= 1:
             return 1.0
+        
+        # Lazy import to reduce memory in web workers
+        import numpy as np
         
         values = np.array(list(bt_params.values()))
         n = len(values)

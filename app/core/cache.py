@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 class HybridCache:
-    def __init__(self, max_size: int = 10000):
+    def __init__(self, max_size: int = 1000):
         # Memory cache: key -> (data, expires_at) using OrderedDict for LRU
         self._memory_cache: OrderedDict[str, tuple[Any, datetime]] = OrderedDict()
         self._max_size = max_size
